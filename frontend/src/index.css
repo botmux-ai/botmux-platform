@@ -1,0 +1,2050 @@
+/* ==========================================================================
+   botmux 平台 — Apple 设计语言层
+   依据《Designing Fluid Interfaces》落到 Web：
+   - 材质分层：半透明磨砂 chrome（backdrop-filter），内容从其下滚过
+   - 弹簧动效：默认阻尼 1.0、响应 0.3–0.4s → cubic-bezier(.32,.72,0,1)
+   - 按下即响应（pointer-down 反馈）、只动 transform/opacity(+一次性 blur)
+   - 在线状态用「在场感」呼吸点；reduced-motion 全部退化为 cross-fade
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- 设计令牌
+   覆盖 Arco 变量。注意：Arco 把变量直接声明在 body 上，元素自身的声明永远
+   胜过继承来的 :root 值——所以这里也必须落在 body（html body 特异性 0,0,2
+   高于 arco 的 body 0,0,1，与加载顺序无关）。*/
+html body {
+  /* 品牌蓝（apple.com #0071E3）与 iOS 系统语义色 */
+  --arcoblue-1: 232, 242, 255;
+  --arcoblue-2: 204, 226, 255;
+  --arcoblue-3: 166, 204, 255;
+  --arcoblue-4: 122, 178, 255;
+  --arcoblue-5: 64, 145, 240;
+  --arcoblue-6: 0, 113, 227;
+  --arcoblue-7: 0, 91, 186;
+  --arcoblue-8: 0, 70, 145;
+  --arcoblue-9: 0, 50, 105;
+  --arcoblue-10: 0, 30, 64;
+
+  --green-1: 227, 250, 234;
+  --green-2: 194, 242, 208;
+  --green-3: 150, 230, 175;
+  --green-4: 103, 216, 140;
+  --green-5: 70, 205, 113;
+  --green-6: 52, 199, 89; /* #34C759 */
+  --green-7: 33, 154, 70; /* 文字用深一档，保证浅底对比度 */
+  --green-8: 25, 120, 55;
+  --green-9: 18, 88, 41;
+  --green-10: 10, 54, 26;
+
+  --orange-1: 255, 244, 224;
+  --orange-2: 255, 232, 194;
+  --orange-3: 255, 214, 150;
+  --orange-4: 255, 193, 99;
+  --orange-5: 255, 168, 46;
+  --orange-6: 255, 149, 0; /* #FF9500 */
+  --orange-7: 209, 118, 0;
+  --orange-8: 168, 92, 0;
+  --orange-9: 126, 66, 0;
+  --orange-10: 80, 41, 0;
+
+  --red-1: 255, 233, 231;
+  --red-2: 255, 214, 211;
+  --red-3: 255, 184, 179;
+  --red-4: 255, 145, 138;
+  --red-5: 255, 102, 94;
+  --red-6: 255, 59, 48; /* #FF3B30 */
+  --red-7: 215, 45, 36;
+  --red-8: 174, 33, 27;
+  --red-9: 130, 22, 18;
+  --red-10: 82, 12, 9;
+
+  /* 问题板状态色：iOS purple / cyan / yellow */
+  --purple-1: 246, 235, 253;
+  --purple-2: 238, 214, 250;
+  --purple-3: 227, 186, 245;
+  --purple-4: 213, 153, 238;
+  --purple-5: 196, 116, 230;
+  --purple-6: 175, 82, 222; /* #AF52DE */
+  --purple-7: 142, 61, 186;
+  --purple-8: 112, 45, 150;
+  --purple-9: 82, 31, 112;
+  --purple-10: 52, 18, 72;
+
+  --cyan-1: 227, 246, 253;
+  --cyan-2: 194, 236, 250;
+  --cyan-3: 148, 222, 245;
+  --cyan-4: 100, 205, 239;
+  --cyan-5: 72, 189, 235;
+  --cyan-6: 50, 173, 230; /* #32ADE6 */
+  --cyan-7: 32, 140, 196;
+  --cyan-8: 22, 110, 158;
+  --cyan-9: 15, 80, 117;
+  --cyan-10: 8, 50, 74;
+
+  --gold-1: 255, 248, 214;
+  --gold-2: 255, 240, 175;
+  --gold-3: 255, 229, 128;
+  --gold-4: 255, 217, 77;
+  --gold-5: 255, 210, 38;
+  --gold-6: 255, 204, 0; /* #FFCC00 */
+  --gold-7: 214, 166, 0;
+  --gold-8: 173, 132, 0;
+  --gold-9: 130, 97, 0;
+  --gold-10: 82, 60, 0;
+
+  /* 中性层级（apple.com 文案灰阶）*/
+  --color-bg-1: #f5f5f7; /* 页面分组背景 */
+  --color-bg-2: #ffffff; /* 卡片 */
+  --color-bg-3: #ffffff; /* 弹层/弹窗 */
+  --color-bg-4: #ffffff;
+  --color-bg-5: #ffffff; /* 浮层（--color-bg-popup 引用） */
+  --color-text-1: #1d1d1f;
+  --color-text-2: #6e6e73;
+  --color-text-3: #86868b;
+  --color-text-4: #aeaeb2;
+  /* iOS systemFill 家族 */
+  --color-fill-1: rgba(120, 120, 128, 0.08);
+  --color-fill-2: rgba(120, 120, 128, 0.12);
+  --color-fill-3: rgba(120, 120, 128, 0.16);
+  --color-fill-4: rgba(120, 120, 128, 0.24);
+  /* 发丝线 */
+  --color-border-1: rgba(0, 0, 0, 0.05);
+  --color-border-2: rgba(0, 0, 0, 0.08);
+  --color-border-3: rgba(0, 0, 0, 0.13);
+  --color-border-4: rgba(0, 0, 0, 0.2);
+  --color-mask-bg: rgba(0, 0, 0, 0.38);
+  /* 次要按钮 → iOS tinted 按钮（浅蓝底 + 蓝字，文字色在下方选择器覆盖）*/
+  --color-secondary: rgba(0, 113, 227, 0.1);
+  --color-secondary-hover: rgba(0, 113, 227, 0.16);
+  --color-secondary-active: rgba(0, 113, 227, 0.2);
+  --color-secondary-disabled: rgba(120, 120, 128, 0.1);
+
+  /* Apple 专用令牌 */
+  --apple-accent: #0071e3;
+  --apple-accent-deep: #0066cc;
+  --apple-accent-ring: rgba(0, 113, 227, 0.28);
+  --apple-green: #34c759;
+  --apple-green-soft: rgba(52, 199, 89, 0.2);
+  --apple-material-bg: rgba(250, 250, 252, 0.72);
+  --apple-material-blur: saturate(180%) blur(20px);
+  --apple-hairline: rgba(0, 0, 0, 0.06);
+  --apple-hairline-strong: rgba(0, 0, 0, 0.1);
+  --apple-card-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.04), 0 6px 20px rgba(0, 0, 0, 0.05);
+  --apple-popup-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 10px 30px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --apple-modal-shadow: 0 24px 70px rgba(0, 0, 0, 0.22), 0 4px 16px rgba(0, 0, 0, 0.1);
+  --apple-segment-active-bg: #ffffff;
+  /* 弹簧曲线：阻尼 1.0（无回弹）、响应 ~0.35s 的 CSS 近似 */
+  --apple-spring: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* 深色：iOS dark grouped 背景 + 更亮的系统色（色板语义反转，与 Arco 暗色约定一致）*/
+html body[arco-theme='dark'] {
+  --arcoblue-1: 0, 26, 51;
+  --arcoblue-2: 0, 38, 77;
+  --arcoblue-3: 0, 52, 105;
+  --arcoblue-4: 0, 70, 140;
+  --arcoblue-5: 0, 102, 204;
+  --arcoblue-6: 10, 132, 255; /* #0A84FF */
+  --arcoblue-7: 72, 156, 255;
+  --arcoblue-8: 128, 184, 255;
+  --arcoblue-9: 178, 210, 255;
+  --arcoblue-10: 224, 238, 255;
+
+  --green-1: 8, 51, 20;
+  --green-2: 11, 71, 29;
+  --green-3: 15, 94, 40;
+  --green-4: 19, 122, 52;
+  --green-5: 34, 165, 70;
+  --green-6: 48, 209, 88; /* #30D158 */
+  --green-7: 100, 220, 130;
+  --green-8: 150, 231, 170;
+  --green-9: 196, 242, 208;
+  --green-10: 227, 250, 234;
+
+  --orange-1: 77, 45, 0;
+  --orange-2: 105, 61, 0;
+  --orange-3: 138, 79, 0;
+  --orange-4: 173, 99, 0;
+  --orange-5: 214, 128, 0;
+  --orange-6: 255, 159, 10; /* #FF9F0A */
+  --orange-7: 255, 179, 64;
+  --orange-8: 255, 199, 115;
+  --orange-9: 255, 219, 166;
+  --orange-10: 255, 239, 217;
+
+  --red-1: 82, 12, 9;
+  --red-2: 110, 16, 12;
+  --red-3: 140, 21, 15;
+  --red-4: 176, 29, 21;
+  --red-5: 215, 45, 36;
+  --red-6: 255, 69, 58; /* #FF453A */
+  --red-7: 255, 105, 97;
+  --red-8: 255, 148, 142;
+  --red-9: 255, 190, 186;
+  --red-10: 255, 231, 229;
+
+  --purple-1: 52, 18, 72;
+  --purple-2: 71, 25, 99;
+  --purple-3: 92, 33, 128;
+  --purple-4: 117, 44, 161;
+  --purple-5: 152, 64, 201;
+  --purple-6: 191, 90, 242; /* #BF5AF2 */
+  --purple-7: 205, 122, 245;
+  --purple-8: 219, 156, 248;
+  --purple-9: 232, 190, 251;
+  --purple-10: 245, 224, 253;
+
+  --cyan-1: 8, 50, 74;
+  --cyan-2: 11, 68, 99;
+  --cyan-3: 15, 88, 128;
+  --cyan-4: 20, 112, 161;
+  --cyan-5: 32, 148, 208;
+  --cyan-6: 100, 210, 255; /* #64D2FF */
+  --cyan-7: 126, 219, 255;
+  --cyan-8: 155, 228, 255;
+  --cyan-9: 186, 237, 255;
+  --cyan-10: 216, 246, 255;
+
+  --gold-1: 82, 60, 0;
+  --gold-2: 107, 79, 0;
+  --gold-3: 138, 102, 0;
+  --gold-4: 173, 128, 0;
+  --gold-5: 214, 166, 0;
+  --gold-6: 255, 214, 10; /* #FFD60A */
+  --gold-7: 255, 222, 61;
+  --gold-8: 255, 230, 110;
+  --gold-9: 255, 238, 158;
+  --gold-10: 255, 246, 207;
+
+  --color-bg-1: #000000;
+  --color-bg-2: #1c1c1e; /* 分组卡片 */
+  --color-bg-3: #1c1c1e; /* 弹窗（sheet） */
+  --color-bg-4: #3a3a3c;
+  --color-bg-5: #2c2c2e; /* 浮层 */
+  --color-text-1: #f5f5f7;
+  --color-text-2: #a1a1a6;
+  --color-text-3: #86868b;
+  --color-text-4: #636366;
+  --color-fill-1: rgba(120, 120, 128, 0.12);
+  --color-fill-2: rgba(120, 120, 128, 0.16);
+  --color-fill-3: rgba(120, 120, 128, 0.22);
+  --color-fill-4: rgba(120, 120, 128, 0.3);
+  --color-border-1: rgba(255, 255, 255, 0.07);
+  --color-border-2: rgba(255, 255, 255, 0.11);
+  --color-border-3: rgba(255, 255, 255, 0.16);
+  --color-border-4: rgba(255, 255, 255, 0.24);
+  --color-mask-bg: rgba(0, 0, 0, 0.55);
+  --color-secondary: rgba(10, 132, 255, 0.16);
+  --color-secondary-hover: rgba(10, 132, 255, 0.24);
+  --color-secondary-active: rgba(10, 132, 255, 0.3);
+  --color-secondary-disabled: rgba(120, 120, 128, 0.14);
+
+  --apple-accent: #0a84ff;
+  --apple-accent-deep: #409cff;
+  --apple-accent-ring: rgba(10, 132, 255, 0.38);
+  --apple-green: #30d158;
+  --apple-green-soft: rgba(48, 209, 88, 0.22);
+  --apple-material-bg: rgba(22, 22, 23, 0.7);
+  --apple-hairline: rgba(255, 255, 255, 0.08);
+  --apple-hairline-strong: rgba(255, 255, 255, 0.14);
+  --apple-card-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.4);
+  --apple-popup-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 14px 36px rgba(0, 0, 0, 0.5);
+  --apple-modal-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 4px 16px rgba(0, 0, 0, 0.4);
+  --apple-segment-active-bg: #636366;
+}
+
+/* ---------------------------------------------------------------- 基础排版 */
+html,
+body {
+  margin: 0;
+}
+
+/* body 背景会传播到视口画布（含过滚橡皮筋区域），无需再设 html 背景 */
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-optical-sizing: auto;
+  background: var(--color-bg-1);
+  color: var(--color-text-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 字号越大字距越紧（SF 的 size-specific tracking）*/
+h1,
+h2,
+h3,
+h4,
+h5,
+.arco-typography {
+  letter-spacing: -0.011em;
+}
+
+h1,
+h2,
+.arco-typography.arco-typography-h1,
+.arco-typography.arco-typography-h2 {
+  letter-spacing: -0.022em;
+}
+
+::selection {
+  background: rgba(0, 113, 227, 0.18);
+}
+
+html body[arco-theme='dark'] ::selection {
+  background: rgba(10, 132, 255, 0.32);
+}
+
+/* 键盘可达性：统一聚焦环 */
+body a:focus-visible,
+body .arco-btn:focus-visible,
+body [role='button']:focus-visible,
+body .arco-tabs-header-title:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--apple-accent-ring);
+}
+
+/* ==========================================================================
+   Arco 组件覆写（body 前缀提升特异性，与 arco.css 加载顺序无关）
+   ========================================================================== */
+
+/* ---- 卡片：Apple 分组面板（16px 圆角 + 发丝线 + 环境阴影）---- */
+body .arco-card {
+  border-radius: 16px;
+  box-shadow: var(--apple-card-shadow);
+  transition: box-shadow 0.25s var(--apple-spring);
+}
+
+body .arco-card-bordered {
+  border: 0.5px solid var(--apple-hairline-strong);
+}
+
+body .arco-card-size-default .arco-card-body {
+  padding: 18px 20px;
+}
+
+/* ---- 按钮：弹簧按压（pointer-down 即响应）；主要按钮为胶囊形 ---- */
+body .arco-btn {
+  border-radius: 10px;
+  font-weight: 500;
+  letter-spacing: -0.011em;
+  transition:
+    transform 0.16s var(--apple-spring),
+    background-color 0.16s,
+    border-color 0.16s,
+    color 0.16s,
+    box-shadow 0.16s,
+    opacity 0.16s;
+}
+
+body .arco-btn:not(.arco-btn-disabled):not(.arco-btn-loading):not(.arco-btn-text):active {
+  transform: scale(0.96);
+}
+
+/* 文字按钮按下不缩放，改为瞬时变淡（iOS 惯例）*/
+body .arco-btn-text:not(.arco-btn-disabled):not(.arco-btn-loading):active {
+  opacity: 0.5;
+}
+
+body .arco-btn-primary {
+  border-radius: 999px;
+}
+
+/* tinted 次要按钮的蓝字 */
+body .arco-btn-secondary:not(.arco-btn-disabled) {
+  color: var(--apple-accent);
+}
+
+body .arco-btn-secondary:not(.arco-btn-disabled):not(.arco-btn-loading):hover,
+body .arco-btn-secondary:not(.arco-btn-disabled):not(.arco-btn-loading):active {
+  color: var(--apple-accent-deep);
+}
+
+/* 语义色文字统一用深一档（浅底对比度）*/
+body .arco-btn-secondary.arco-btn-status-warning:not(.arco-btn-disabled),
+body .arco-btn-secondary.arco-btn-status-warning:not(.arco-btn-disabled):not(.arco-btn-loading):hover,
+body .arco-btn-secondary.arco-btn-status-warning:not(.arco-btn-disabled):not(.arco-btn-loading):active {
+  color: rgb(var(--orange-7));
+}
+
+body .arco-btn-secondary.arco-btn-status-danger:not(.arco-btn-disabled),
+body .arco-btn-secondary.arco-btn-status-danger:not(.arco-btn-disabled):not(.arco-btn-loading):hover,
+body .arco-btn-secondary.arco-btn-status-danger:not(.arco-btn-disabled):not(.arco-btn-loading):active {
+  color: rgb(var(--red-7));
+}
+
+body .arco-btn-size-small {
+  border-radius: 9px;
+}
+
+body .arco-btn-size-small.arco-btn-primary {
+  border-radius: 999px;
+}
+
+body .arco-btn-size-mini {
+  border-radius: 8px;
+}
+
+/* ---- 标签：胶囊 chip，语义色文字加深一档 ---- */
+body .arco-tag {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 21px;
+}
+
+body .arco-tag-checked.arco-tag-green {
+  color: rgb(var(--green-7));
+}
+
+body .arco-tag-checked.arco-tag-orange {
+  color: rgb(var(--orange-7));
+}
+
+body .arco-tag-checked.arco-tag-red {
+  color: rgb(var(--red-7));
+}
+
+body .arco-tag-checked.arco-tag-arcoblue {
+  color: rgb(var(--arcoblue-7));
+}
+
+body .arco-tag-checked.arco-tag-purple {
+  color: rgb(var(--purple-7));
+}
+
+body .arco-tag-checked.arco-tag-cyan {
+  color: rgb(var(--cyan-7));
+}
+
+body .arco-tag-checked.arco-tag-gold {
+  color: rgb(var(--gold-7));
+}
+
+/* ---- 抽屉：iPadOS slide-over 式 sheet（左缘圆角 + 遮罩微模糊）---- */
+body .arco-drawer {
+  border-top-left-radius: 18px;
+  border-bottom-left-radius: 18px;
+  box-shadow: var(--apple-modal-shadow);
+}
+
+body .arco-drawer-header {
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: none;
+}
+
+body .arco-drawer-header-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+body .arco-drawer .arco-drawer-close-icon {
+  top: 20px;
+  right: 24px;
+}
+
+body .arco-drawer-content {
+  padding: 8px 24px 24px;
+}
+
+body .arco-drawer-mask {
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* ---- 问题板 ---- */
+
+/* 工具行与其余两个 tab 同一文法（大标题 + 右侧操作），见 .section-head */
+.issue-board .section-head .arco-select {
+  text-align: left;
+}
+
+/* 四列分组面板：页面底 → 列面板（fill-1）→ 卡片（bg-2）的三级层次 */
+.issue-columns {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.issue-column {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 10px 2px;
+  border-radius: 14px;
+  background: var(--color-fill-1);
+}
+
+.issue-column-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 2px 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-text-3);
+}
+
+/* 列内卡片数：安静的胶囊计数 */
+.issue-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--color-fill-2);
+  color: var(--color-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  line-height: 18px;
+}
+
+.issue-column-empty {
+  padding: 6px 4px 14px;
+  font-size: 12px;
+  color: var(--color-text-4);
+}
+
+/* 看板卡片：hover 轻抬 + pointer-down 按压；backwards 填充避免与 hover 变换冲突 */
+body .arco-card.issue-card {
+  margin-bottom: 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  animation-fill-mode: backwards;
+  transition:
+    transform 0.18s var(--apple-spring),
+    box-shadow 0.25s var(--apple-spring);
+}
+
+body .arco-card.issue-card:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0.5px 1.5px rgba(0, 0, 0, 0.05),
+    0 10px 26px rgba(0, 0, 0, 0.09);
+}
+
+body .arco-card.issue-card:active {
+  transform: scale(0.98);
+}
+
+html body[arco-theme='dark'] .arco-card.issue-card:hover {
+  box-shadow:
+    0 0.5px 1.5px rgba(0, 0, 0, 0.55),
+    0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+.issue-card-title {
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.issue-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.issue-card-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-3);
+  flex-shrink: 0;
+}
+
+.issue-card-preview {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.issue-card-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 中性信息 chip（仓库 / 标签）与只在列内有歧义时才出现的子状态 pill */
+.issue-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--color-fill-2);
+  color: var(--color-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-chip-muted {
+  background: transparent;
+  color: var(--color-text-4);
+  padding: 0 2px;
+}
+
+.issue-pill-purple {
+  background: rgba(var(--purple-6), 0.12);
+  color: rgb(var(--purple-7));
+}
+
+.issue-pill-cyan {
+  background: rgba(var(--cyan-6), 0.14);
+  color: rgb(var(--cyan-7));
+}
+
+.issue-pill-orange {
+  background: rgba(var(--orange-6), 0.13);
+  color: rgb(var(--orange-7));
+}
+
+/* 顶部「需关注」异常条：红色调材质（非嵌套卡片） */
+.issue-attention {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 0.5px solid rgba(var(--red-6), 0.28);
+  border-radius: 16px;
+  background: rgba(var(--red-6), 0.055);
+}
+
+.issue-attention-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  color: var(--color-text-1);
+}
+
+/* 需关注 = 红色「在场感」：沿用在场点语法，语义是「这里可能仍有任务在运行」 */
+.dot.alert {
+  background: rgb(var(--red-6));
+  box-shadow: 0 0 0 3px rgba(var(--red-6), 0.18);
+}
+
+.dot.alert::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid rgb(var(--red-6));
+  opacity: 0;
+  animation: apple-presence 2.4s var(--apple-spring) infinite;
+}
+
+/* 工具行：筛选框与数据新鲜度 */
+.issue-board .issue-filter {
+  width: 200px;
+}
+
+.issue-freshness {
+  font-size: 11px;
+  color: var(--color-text-4);
+  white-space: nowrap;
+}
+
+.issue-attention-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.issue-attention-item {
+  width: 260px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--apple-hairline);
+  border-radius: 12px;
+  background: var(--color-bg-2);
+  box-shadow: 0 0.5px 1.5px rgba(0, 0, 0, 0.04);
+}
+
+.issue-attention-reason {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+/* 详情抽屉时间线：发丝线分隔的行 */
+.issue-events {
+  margin-top: 4px;
+}
+
+.issue-events-empty {
+  font-size: 12px;
+  color: var(--color-text-4);
+}
+
+.issue-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 0.5px solid var(--apple-hairline);
+  font-size: 12px;
+}
+
+.issue-event:last-child {
+  border-bottom: none;
+}
+
+.issue-event-desc {
+  color: var(--color-text-3);
+}
+
+/* ---- 新建问题 / 预览：iOS 分组表单 + 原地校验 ---- */
+.issue-form-group {
+  margin-bottom: 4px;
+}
+
+/* 系统字段与「其他信息」之间的分组分隔（渲染顺序即设置顺序） */
+.issue-form-group-title {
+  margin: 20px 2px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-text-3);
+}
+
+.issue-field {
+  margin-bottom: 14px;
+}
+
+.issue-field:last-child {
+  margin-bottom: 0;
+}
+
+.issue-field-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.011em;
+  color: var(--color-text-1);
+}
+
+/* 必填是默认预期，只给例外标「可选」 */
+.issue-field-optional {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-4);
+}
+
+.issue-field-error {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgb(var(--red-7));
+  animation: issue-caption-in 0.2s var(--apple-spring) both;
+}
+
+@keyframes issue-caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 错误当场指到控件本身：红边 + 字段下方一句说明 */
+body .issue-field.has-error .arco-input,
+body .issue-field.has-error .arco-input-wrapper,
+body .issue-field.has-error .arco-textarea,
+body .issue-field.has-error .arco-select-view,
+body .issue-field.has-error .arco-radio-button {
+  border-color: rgb(var(--red-6));
+}
+
+.issue-form-note {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-fill-1);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-3);
+}
+
+.issue-repo-custom {
+  margin-top: 8px;
+}
+
+.issue-form-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.issue-form-preview-note {
+  margin-top: 20px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-fill-1);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-3);
+}
+
+/* ---- 表单设置：编辑即预览 ---- */
+.issue-settings-note {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-3);
+}
+
+.issue-settings-preview-link {
+  margin-left: 2px;
+}
+
+.issue-settings-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 4px 0 10px;
+}
+
+.issue-settings-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  color: var(--color-text-1);
+}
+
+.issue-settings-group-cap {
+  margin: -4px 0 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text-4);
+}
+
+.issue-setting-field {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--color-fill-1);
+}
+
+.issue-setting-field.has-error {
+  box-shadow: 0 0 0 0.5px rgba(var(--red-6), 0.5);
+}
+
+.issue-setting-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.issue-setting-field-head:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--apple-accent-ring);
+  border-radius: 8px;
+}
+
+.issue-setting-field-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.issue-setting-field-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-setting-field-meta {
+  font-size: 11px;
+  color: var(--color-text-3);
+  white-space: nowrap;
+}
+
+.issue-setting-field-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 展开指示：折叠时朝右、展开时朝下（iOS disclosure 惯例），与行内「下移」箭头区分 */
+.issue-setting-chevron {
+  margin-left: 4px;
+  color: var(--color-text-3);
+  transform: rotate(-90deg);
+  transition: transform 0.2s var(--apple-spring);
+}
+
+.issue-setting-chevron.open {
+  transform: rotate(0deg);
+}
+
+.issue-setting-field-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  animation: issue-caption-in 0.2s var(--apple-spring) both;
+}
+
+.issue-setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.issue-setting-row-horizontal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.issue-setting-caption {
+  font-size: 11px;
+  color: var(--color-text-3);
+}
+
+.issue-opts-add {
+  margin-top: 6px;
+}
+
+.issue-setting-error {
+  font-size: 12px;
+  color: rgb(var(--red-7));
+  animation: issue-caption-in 0.2s var(--apple-spring) both;
+}
+
+.issue-setting-field-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.issue-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.issue-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.issue-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* ---- 详情抽屉：顶部状态 + 操作 ---- */
+.issue-detail-flags {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.issue-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.issue-detail-hint {
+  font-size: 11px;
+  color: var(--color-text-4);
+}
+
+/* ---- 输入：iOS 填充式搜索框 + macOS 聚焦光环 ---- */
+body .arco-input,
+body .arco-textarea,
+body .arco-select-view {
+  border-radius: 10px;
+}
+
+body .arco-input:focus,
+body .arco-input.arco-input-focus,
+body .arco-textarea:focus {
+  border-color: var(--apple-accent);
+  background-color: var(--color-bg-2);
+  box-shadow: 0 0 0 3.5px var(--apple-accent-ring);
+}
+
+body .arco-select-view:focus-within {
+  border-color: var(--apple-accent);
+  background-color: var(--color-bg-2);
+  box-shadow: 0 0 0 3.5px var(--apple-accent-ring);
+}
+
+/* ---- 单选按钮组：与顶部分段控件（.app-tabs）同一语言 ----
+   Arco 默认用每个按钮的 ::after 各画一段灰底再拼成轨道，按钮一圆角就断成几截、
+   底边露出直角矩形。这里把轨道收回到 group 容器本身（一整块圆角），按钮只负责选中态的白色胶囊。 */
+body .arco-radio-group-type-button {
+  display: inline-flex;
+  flex-wrap: wrap; /* 选项多（如问题板仓库预设）时在窄屏换行，别撑破抽屉 */
+  align-items: center;
+  max-width: 100%;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--color-fill-2);
+}
+
+body .arco-radio-group-type-button.arco-radio-group-direction-vertical {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* 选择器都挂在 group 下，优先级压过 Arco 的 :not(:first-of-type)::before 分隔线与 body[arco-theme='dark'] 规则 */
+body .arco-radio-group-type-button .arco-radio-button {
+  margin: 0;
+  border-radius: 8px;
+  color: var(--color-text-2);
+  background-color: transparent;
+  transition:
+    background-color 0.2s var(--apple-spring),
+    color 0.2s,
+    box-shadow 0.2s;
+}
+
+body .arco-radio-group-type-button .arco-radio-button::before,
+body .arco-radio-group-type-button .arco-radio-button::after {
+  display: none;
+}
+
+body .arco-radio-group-type-button .arco-radio-button:not(.arco-radio-disabled):hover,
+body[arco-theme='dark'] .arco-radio-group-type-button .arco-radio-button:not(.arco-radio-disabled):hover {
+  background-color: transparent;
+  color: var(--color-text-1);
+}
+
+body .arco-radio-group-type-button .arco-radio-button.arco-radio-checked,
+body .arco-radio-group-type-button .arco-radio-button.arco-radio-checked:not(.arco-radio-disabled):hover,
+body[arco-theme='dark'] .arco-radio-group-type-button .arco-radio-button.arco-radio-checked,
+body[arco-theme='dark'] .arco-radio-group-type-button .arco-radio-button.arco-radio-checked:not(.arco-radio-disabled):hover {
+  background-color: var(--apple-segment-active-bg);
+  color: var(--color-text-1);
+  font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.1),
+    0 0.5px 1px rgba(0, 0, 0, 0.05);
+}
+
+/* 禁用态（如机器离线时的目录模式）：必须与可用态一眼可分，优先级盖过上面的常态规则 */
+body .arco-radio-group-type-button .arco-radio-button.arco-radio-disabled,
+body[arco-theme='dark'] .arco-radio-group-type-button .arco-radio-button.arco-radio-disabled {
+  color: var(--color-text-4);
+  cursor: not-allowed;
+}
+
+body .arco-radio-group-type-button .arco-radio-button.arco-radio-disabled.arco-radio-checked,
+body[arco-theme='dark'] .arco-radio-group-type-button .arco-radio-button.arco-radio-disabled.arco-radio-checked {
+  background-color: var(--color-fill-3);
+  color: var(--color-text-3);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+/* ---- 弹窗：18px sheet，标题居中，去发丝线，材质化入场 ----
+   注意：不能加 overflow:hidden——Arco Select 的弹层默认挂载在触发节点的父容器
+   （即弹窗内容区）里，overflow 会把下拉裁掉；header/footer 均无独立底色，
+   圆角靠 .arco-modal 自身背景即可成立。*/
+body .arco-modal {
+  border-radius: 18px;
+  box-shadow: var(--apple-modal-shadow);
+}
+
+body .arco-modal-header {
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: none;
+}
+
+body .arco-modal-header .arco-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+body .arco-modal-content {
+  padding: 4px 24px 24px;
+}
+
+body .arco-modal-footer {
+  border-top: none;
+  padding: 0 24px 22px;
+}
+
+body .arco-modal-mask {
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+/* 材质化（materialize）：模糊 + 缩放 + 位移，而非单纯淡入 */
+body .arco-modal.zoomInFadeOut-enter,
+body .arco-modal.zoomInFadeOut-appear {
+  opacity: 0;
+  transform: scale(0.94) translateY(16px);
+  filter: blur(8px);
+}
+
+body .arco-modal.zoomInFadeOut-enter-active,
+body .arco-modal.zoomInFadeOut-appear-active {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  filter: blur(0);
+  transition:
+    opacity 0.34s var(--apple-spring),
+    transform 0.34s var(--apple-spring),
+    filter 0.34s var(--apple-spring);
+}
+
+body .arco-modal.zoomInFadeOut-exit {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  filter: blur(0);
+}
+
+body .arco-modal.zoomInFadeOut-exit-active {
+  opacity: 0;
+  transform: scale(0.97) translateY(8px);
+  filter: blur(4px);
+  transition:
+    opacity 0.18s ease-in,
+    transform 0.18s ease-in,
+    filter 0.18s ease-in;
+}
+
+/* ---- 全局浮层弹簧化（气泡/下拉/工具提示共用 zoomInFadeOut）---- */
+body .arco-trigger-popup .zoomInFadeOut-enter-active,
+body .arco-trigger-popup .zoomInFadeOut-appear-active {
+  transition:
+    opacity 0.24s var(--apple-spring),
+    transform 0.24s var(--apple-spring);
+}
+
+/* ---- 消息提示：Dynamic-Island 式胶囊材质 ---- */
+body .arco-message {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 999px;
+  background: var(--apple-material-bg);
+  -webkit-backdrop-filter: var(--apple-material-blur);
+  backdrop-filter: var(--apple-material-blur);
+  box-shadow: 0 0 0 0.5px var(--apple-hairline-strong), 0 10px 28px rgba(0, 0, 0, 0.16);
+  font-weight: 500;
+  letter-spacing: -0.011em;
+}
+
+/* ---- 下拉菜单：macOS 菜单（hover 蓝底白字）---- */
+body .arco-dropdown-menu {
+  padding: 5px 0;
+  border: none;
+  border-radius: 14px;
+  background-color: var(--color-bg-5);
+  box-shadow: var(--apple-popup-shadow);
+}
+
+body .arco-dropdown-menu .arco-dropdown-menu-item {
+  width: calc(100% - 10px);
+  height: 34px;
+  margin: 0 5px;
+  padding: 0 10px;
+  border-radius: 9px;
+  line-height: 34px;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+body .arco-dropdown-menu .arco-dropdown-menu-item:hover {
+  background-color: var(--apple-accent);
+  color: #fff !important; /* 覆盖行内危险色：macOS 菜单 hover 统一白字 */
+}
+
+/* ---- 气泡确认 / 弹出框 ---- */
+body .arco-popover-content,
+body .arco-popconfirm-content {
+  border: none;
+  border-radius: 14px;
+  box-shadow: var(--apple-popup-shadow);
+}
+
+/* ---- 工具提示 ---- */
+body .arco-tooltip-content {
+  padding: 6px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+/* ---- 警告条 ---- */
+body .arco-alert {
+  border-radius: 12px;
+  padding: 10px 16px;
+}
+
+/* ---- 选择器下拉面板 ---- */
+body .arco-select-popup {
+  border: none;
+  border-radius: 14px;
+  box-shadow: var(--apple-popup-shadow);
+}
+
+body .arco-select .arco-select-option {
+  border-radius: 9px;
+  margin: 0 5px;
+  width: calc(100% - 10px);
+}
+
+/* ==========================================================================
+   应用布局
+   ========================================================================== */
+
+/* ---- 顶栏：粘性磨砂材质（内容从其下滚过）---- */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 24px;
+  border-bottom: none;
+  background: var(--apple-material-bg);
+  -webkit-backdrop-filter: var(--apple-material-blur);
+  backdrop-filter: var(--apple-material-blur);
+  box-shadow: inset 0 -0.5px 0 var(--apple-hairline-strong);
+}
+
+.app-header .brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: -0.022em;
+}
+
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 6.5px; /* iOS app icon 连续曲率的近似 */
+  box-shadow: 0 0 0 0.5px var(--apple-hairline-strong);
+}
+
+.brand-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-header .header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app-header .header-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--color-text-2);
+  transition:
+    background-color 0.16s,
+    color 0.16s,
+    opacity 0.16s;
+}
+
+.app-header .header-link:hover {
+  background: var(--color-fill-2);
+  color: var(--color-text-1);
+}
+
+.app-header .header-link:active {
+  opacity: 0.5; /* pointer-down 即反馈 */
+}
+
+.app-header .header-link svg {
+  width: 18px;
+  height: 18px;
+}
+
+.header-text-link {
+  color: var(--color-text-2);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  transition:
+    background-color 0.16s,
+    color 0.16s,
+    opacity 0.16s;
+}
+
+.header-text-link:hover {
+  color: var(--color-text-1);
+  background: var(--color-fill-2);
+}
+
+.header-text-link:active {
+  opacity: 0.5;
+}
+
+.install-command-row {
+  position: relative;
+}
+
+.install-command-row > .install-command {
+  margin: 0;
+  padding-right: 46px;
+  line-height: 1.6;
+}
+
+.install-command-row > .install-copy-button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+}
+
+.install-hint {
+  margin: 12px 0 0 !important;
+  font-size: 13px;
+}
+
+.app-wrap {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+}
+
+/* ---- 登录卡片：聚焦的单一场景 ---- */
+.login-card {
+  max-width: 420px;
+  margin: 56px auto 0;
+  text-align: center;
+}
+
+.login-card .arco-card-body {
+  padding: 32px 28px;
+}
+
+.login-card .arco-btn-primary {
+  height: 40px;
+  margin-top: 8px;
+  padding: 0 26px;
+  font-size: 15px;
+}
+
+/* ---- 分段控件（iOS Segmented Control）---- */
+body .app-tabs .arco-tabs-header {
+  justify-content: center;
+}
+
+body .app-tabs .arco-tabs-header-nav {
+  flex: none;
+  display: inline-flex;
+  padding: 2.5px;
+  border-radius: 12px;
+  background: var(--color-fill-2);
+}
+
+body .app-tabs .arco-tabs-header-ink {
+  display: none;
+}
+
+body .app-tabs .arco-tabs-header-nav-rounded .arco-tabs-header-title {
+  margin: 0;
+  padding: 4.5px 18px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-2);
+  transition:
+    background-color 0.22s var(--apple-spring),
+    color 0.22s,
+    box-shadow 0.22s;
+}
+
+body .app-tabs .arco-tabs-header-nav-rounded .arco-tabs-header-title:hover {
+  background-color: transparent;
+  color: var(--color-text-1);
+}
+
+body .app-tabs .arco-tabs-header-nav-rounded .arco-tabs-header-title-active,
+body .app-tabs .arco-tabs-header-nav-rounded .arco-tabs-header-title-active:hover {
+  background-color: var(--apple-segment-active-bg);
+  color: var(--color-text-1);
+  font-weight: 600;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.1),
+    0 0.5px 1px rgba(0, 0, 0, 0.05);
+}
+
+/* ---- 区块标题：大而轻的分页标题 ---- */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 30px 0 12px;
+}
+
+.section-head:first-of-type {
+  margin-top: 10px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.15;
+}
+
+/* ---- 版本大盘 ---- */
+.version-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.version-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.version-stat-label {
+  font-size: 13px;
+  color: var(--color-text-3);
+}
+
+.version-stat-value {
+  margin-top: 4px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.version-stat-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.version-hint {
+  margin-bottom: 12px !important;
+  font-size: 13px;
+}
+
+.version-row + .version-row {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 0.5px solid var(--apple-hairline);
+}
+
+.version-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.version-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.version-row-count {
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.version-row-other,
+.version-row-foot {
+  color: var(--color-text-3);
+}
+
+.version-bar-track {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--color-fill-2);
+  overflow: hidden;
+}
+
+.version-bar {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-text-4);
+  transition: width 0.4s var(--apple-spring);
+}
+
+.version-bar.top {
+  background: var(--apple-accent);
+}
+
+.version-row-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.version-updated {
+  display: block;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 600px) {
+  .version-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- 等宽代码块 ---- */
+.mono-block {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--color-fill-1);
+  border: 0.5px solid var(--apple-hairline);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* ---- 机器 / 团队行 ---- */
+.machine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.machine-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 在线状态「在场感」呼吸点：柔光晕染 + 扩散环（Find My 式）*/
+.dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.dot.on {
+  background: var(--apple-green);
+  box-shadow: 0 0 0 3px var(--apple-green-soft);
+  /* 给光晕留出左侧空间：Arco tag-content 默认 overflow:hidden（下一条 :has 规则
+     在现代内核上已解除裁剪，此 margin 让老内核至少保住光晕）*/
+  margin-left: 3px;
+}
+
+/* 状态点的光晕/扩散环需要溢出 tag 内容区——解除 Arco tag-content 的 overflow 裁剪 */
+body .arco-tag .arco-tag-content:has(> .dot.on) {
+  overflow: visible;
+}
+
+.dot.on::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid var(--apple-green);
+  opacity: 0;
+  animation: apple-presence 2.4s var(--apple-spring) infinite;
+}
+
+.dot.off {
+  background: var(--color-text-4);
+}
+
+@keyframes apple-presence {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.75;
+  }
+  70%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+/* ---- 列表「材质化」入场：一次性的编排时刻 ---- */
+@keyframes apple-materialize {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.app-wrap .arco-card,
+.device-page-wrap .arco-card,
+.mobile-content .arco-card {
+  animation: apple-materialize 0.44s var(--apple-spring) both;
+}
+
+.app-wrap .arco-card:nth-child(2),
+.device-page-wrap .arco-card:nth-child(2),
+.mobile-content .arco-card:nth-child(2) {
+  animation-delay: 0.05s;
+}
+
+.app-wrap .arco-card:nth-child(3),
+.device-page-wrap .arco-card:nth-child(3),
+.mobile-content .arco-card:nth-child(3) {
+  animation-delay: 0.1s;
+}
+
+.app-wrap .arco-card:nth-child(4),
+.device-page-wrap .arco-card:nth-child(4),
+.mobile-content .arco-card:nth-child(4) {
+  animation-delay: 0.15s;
+}
+
+.app-wrap .arco-card:nth-child(5),
+.device-page-wrap .arco-card:nth-child(5),
+.mobile-content .arco-card:nth-child(5) {
+  animation-delay: 0.2s;
+}
+
+.app-wrap .arco-card:nth-child(n + 6),
+.device-page-wrap .arco-card:nth-child(n + 6),
+.mobile-content .arco-card:nth-child(n + 6) {
+  animation-delay: 0.25s;
+}
+
+/* ---- 团队卡片 ---- */
+.roster-member {
+  padding: 8px 0;
+  border-top: 0.5px solid var(--color-border-2);
+}
+
+.roster-member:first-child {
+  border-top: none;
+}
+
+.team-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.team-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.team-strip-label {
+  min-width: 56px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.team-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--color-border-2);
+}
+
+.user-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.user-option .uo-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.user-option .uo-email {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+/* ---- 设备页 ---- */
+.credential-grants-table .arco-table-th,
+.credential-grants-table .arco-table-td {
+  white-space: nowrap;
+}
+
+.device-page-wrap {
+  max-width: 720px;
+}
+
+.device-page-title h4 {
+  margin: 4px 0 6px;
+  letter-spacing: -0.022em;
+}
+
+.device-loading {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.device-confirm-name,
+.managed-device-title,
+.mobile-machine-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.device-confirm-name h5 {
+  margin: 0;
+}
+
+.device-detail-list {
+  margin: 20px 0;
+  border-top: 0.5px solid var(--color-border-2);
+}
+
+.device-detail-list > div {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 0.5px solid var(--color-border-2);
+}
+
+.device-detail-list dt {
+  color: var(--color-text-3);
+}
+
+.device-detail-list dd {
+  margin: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.device-scope-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.device-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.managed-device-card {
+  margin-bottom: 12px;
+}
+
+.managed-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.managed-device-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- 移动版 ---- */
+.mobile-shell {
+  min-height: 100vh;
+  background: var(--color-bg-1);
+}
+
+.mobile-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: max(14px, env(safe-area-inset-top)) 16px 12px;
+  background: var(--apple-material-bg);
+  border-bottom: none;
+  -webkit-backdrop-filter: var(--apple-material-blur);
+  backdrop-filter: var(--apple-material-blur);
+  box-shadow: inset 0 -0.5px 0 var(--apple-hairline-strong);
+}
+
+.mobile-header a {
+  color: var(--apple-accent);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mobile-brand {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+}
+
+.mobile-content {
+  padding: 18px 12px calc(36px + env(safe-area-inset-bottom));
+}
+
+.mobile-welcome {
+  margin: 0 4px 18px;
+}
+
+.mobile-welcome h4 {
+  margin: 0 0 4px;
+  letter-spacing: -0.022em;
+}
+
+.mobile-machine-card {
+  margin-bottom: 12px;
+}
+
+.mobile-machine-title {
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mobile-open-button {
+  margin-top: 16px;
+  min-height: 42px;
+}
+
+/* ==========================================================================
+   无障碍降级
+   ========================================================================== */
+
+/* 减少动态效果：弹簧与位移全部退化为 cross-fade */
+@media (prefers-reduced-motion: reduce) {
+  .app-wrap .arco-card,
+  .device-page-wrap .arco-card,
+  .mobile-content .arco-card {
+    animation-name: apple-fade;
+    animation-duration: 0.2s;
+    animation-delay: 0s !important;
+  }
+
+  @keyframes apple-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .issue-field-error,
+  .issue-setting-error,
+  .issue-setting-field-body {
+    animation-name: apple-fade;
+  }
+
+  .issue-setting-chevron {
+    transition: none;
+  }
+
+  .dot.on::after,
+  .dot.alert::after {
+    content: none;
+  }
+
+  body .arco-btn {
+    transition: background-color 0.1s, border-color 0.1s, color 0.1s;
+  }
+
+  body .arco-btn:not(.arco-btn-disabled):not(.arco-btn-loading):not(.arco-btn-text):active {
+    transform: none;
+  }
+
+  body .arco-modal.zoomInFadeOut-enter,
+  body .arco-modal.zoomInFadeOut-appear,
+  body .arco-modal.zoomInFadeOut-exit,
+  body .arco-modal.zoomInFadeOut-exit-active {
+    transform: none;
+    filter: none;
+  }
+
+  body .arco-modal.zoomInFadeOut-enter-active,
+  body .arco-modal.zoomInFadeOut-appear-active {
+    transform: none;
+    filter: none;
+    transition: opacity 0.15s ease;
+  }
+}
+
+/* 减少透明：材质退化为实色 */
+@media (prefers-reduced-transparency: reduce) {
+  .app-header,
+  .mobile-header,
+  body .arco-message {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--color-bg-2);
+  }
+
+  body .arco-modal-mask,
+  body .arco-drawer-mask {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* 增强对比：发丝线加实 */
+@media (prefers-contrast: more) {
+  html body {
+    --apple-hairline: rgba(0, 0, 0, 0.2);
+    --apple-hairline-strong: rgba(0, 0, 0, 0.32);
+  }
+
+  html body[arco-theme='dark'] {
+    --apple-hairline: rgba(255, 255, 255, 0.28);
+    --apple-hairline-strong: rgba(255, 255, 255, 0.4);
+  }
+}
+
+/* ---- 窄屏 ---- */
+@media (max-width: 600px) {
+  .app-header {
+    padding: 10px 14px;
+  }
+
+  .device-page-header .arco-space {
+    gap: 0 !important;
+  }
+
+  .app-wrap {
+    padding: 16px 12px 40px;
+  }
+
+  .machine-row {
+    align-items: flex-start;
+  }
+
+  .managed-device-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .managed-device-row > .arco-popconfirm-wrapper,
+  .managed-device-row > button {
+    width: 100%;
+  }
+
+  .device-confirm-actions > button {
+    flex: 1;
+    min-height: 42px;
+  }
+
+  /* 窄屏：看板降级为纵向列表（DESIGN §十）；不用 2×2——390px 下 170px 的列不可用 */
+  .issue-columns {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .issue-column {
+    flex: none;
+  }
+
+  .issue-attention-item {
+    width: 100%;
+  }
+
+  .issue-board .issue-filter {
+    width: 140px;
+  }
+}

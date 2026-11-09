@@ -1,0 +1,40 @@
+{
+  "name": "@botmux/platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Botmux platform: Go/Hertz backend with a React frontend.",
+  "type": "commonjs",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run build:release",
+    "build:release": "npm run clean && npm run test:installer && npm run test:go:race && npm run build:backend && npm run vet:go && npm run build:frontend && npm run test:smoke",
+    "build:backend": "sh build.sh",
+    "build:frontend": "tsc -p frontend/tsconfig.json --noEmit && vite build",
+    "test:installer": "sh scripts/test-installer.sh",
+    "test": "npm run test:go && npm run test:frontend",
+    "test:frontend": "tsc -p frontend/tsconfig.test.json && node --test 'dist-frontend-test/test/**/*.test.js'",
+    "test:go": "sh scripts/go-modules.sh test ./...",
+    "test:go:race": "sh scripts/go-modules.sh test -race ./...",
+    "vet:go": "sh scripts/go-modules.sh vet ./...",
+    "test:smoke": "BOTMUX_SMOKE_PORT=8124 BOTMUX_SMOKE_DASH_PORT=7992 node scripts/smoke.mjs",
+    "start": "./dist/bin/botmux-platform",
+    "dev": "sh scripts/dev.sh",
+    "dev:frontend": "vite",
+    "typecheck": "tsc -p frontend/tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@arco-design/web-react": "^2.66.15",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.11",
+    "ws": "^8.18.0"
+  }
+}

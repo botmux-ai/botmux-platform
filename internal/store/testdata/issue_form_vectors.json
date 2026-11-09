@@ -1,0 +1,3508 @@
+{
+ "presets": [
+  {
+   "name": "not array",
+   "input": {
+    "a": 1
+   },
+   "want": []
+  },
+  {
+   "name": "null",
+   "input": null,
+   "want": []
+  },
+  {
+   "name": "basic",
+   "input": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": " botmux ",
+     "remote": " org/x "
+    }
+   ],
+   "want": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux",
+     "remote": "org/x"
+    }
+   ]
+  },
+  {
+   "name": "drops bad items",
+   "input": [
+    null,
+    1,
+    "x",
+    [],
+    {
+     "label": ""
+    },
+    {
+     "label": "   "
+    },
+    {
+     "id": "k",
+     "label": "ok"
+    }
+   ],
+   "want": [
+    {
+     "id": "k",
+     "label": "ok"
+    }
+   ]
+  },
+  {
+   "name": "coerces numbers and bools",
+   "input": [
+    {
+     "id": 12,
+     "label": 1.5
+    },
+    {
+     "id": true,
+     "label": false
+    },
+    {
+     "id": "n",
+     "label": 1e+21
+    },
+    {
+     "id": "m",
+     "label": 0.000001
+    },
+    {
+     "id": "o",
+     "label": 1e-7
+    }
+   ],
+   "want": [
+    {
+     "id": "12",
+     "label": "1.5"
+    },
+    {
+     "id": "true",
+     "label": "false"
+    },
+    {
+     "id": "n",
+     "label": "1e+21"
+    },
+    {
+     "id": "m",
+     "label": "0.000001"
+    },
+    {
+     "id": "o",
+     "label": "1e-7"
+    }
+   ]
+  },
+  {
+   "name": "array label coercion",
+   "input": [
+    {
+     "id": "arr",
+     "label": [
+      1,
+      [
+       2,
+       null
+      ],
+      "x"
+     ]
+    },
+    {
+     "id": "obj",
+     "label": {
+      "a": 1
+     }
+    }
+   ],
+   "want": [
+    {
+     "id": "arr",
+     "label": "1,2,,x"
+    },
+    {
+     "id": "obj",
+     "label": "[object Object]"
+    }
+   ]
+  },
+  {
+   "name": "long fields truncate utf16",
+   "input": [
+    {
+     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+     "remote": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+    }
+   ],
+   "want": [
+    {
+     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+     "remote": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+    }
+   ]
+  },
+  {
+   "name": "surrogate split",
+   "input": [
+    {
+     "id": "s",
+     "label": "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+   ],
+   "want": [
+    {
+     "id": "s",
+     "label": "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\ud83d"
+    }
+   ]
+  },
+  {
+   "name": "js whitespace",
+   "input": [
+    {
+     "id": "﻿id　",
+     "label": " lab ",
+     "remote": "keep"
+    }
+   ],
+   "want": [
+    {
+     "id": "id",
+     "label": "lab",
+     "remote": "keep"
+    }
+   ]
+  }
+ ],
+ "forms": [
+  {
+   "name": "undefined-like null",
+   "input": null,
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "required": false,
+      "placeholder": "逗号分隔，如 bug, p1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "string",
+   "input": "x",
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "required": false,
+      "placeholder": "逗号分隔，如 bug, p1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "array root",
+   "input": [],
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "required": false,
+      "placeholder": "逗号分隔，如 bug, p1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "empty fields",
+   "input": {
+    "fields": []
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "required": false,
+      "placeholder": "逗号分隔，如 bug, p1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "fields not array",
+   "input": {
+    "fields": {
+     "a": 1
+    }
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "required": false,
+      "placeholder": "逗号分隔，如 bug, p1"
+     }
+    ]
+   }
+  },
+  {
+   "name": "body only",
+   "input": {
+    "fields": [
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "描述",
+      "required": true
+     }
+    ]
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "描述",
+      "required": true
+     }
+    ]
+   }
+  },
+  {
+   "name": "title not required",
+   "input": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "placeholder": "p"
+     },
+     {
+      "id": "body",
+      "type": "text",
+      "label": ""
+     }
+    ]
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "placeholder": "p",
+      "required": true
+     },
+     {
+      "id": "body",
+      "type": "text",
+      "label": "body"
+     }
+    ]
+   }
+  },
+  {
+   "name": "type locks",
+   "input": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "textarea",
+      "label": "bad title"
+     },
+     {
+      "id": "body",
+      "type": "select",
+      "label": "bad",
+      "options": [
+       "a"
+      ]
+     },
+     {
+      "id": "repo",
+      "type": "text",
+      "label": "bad repo"
+     },
+     {
+      "id": "labels",
+      "type": "multiselect",
+      "label": "L",
+      "options": [
+       "bug",
+       " p1 ",
+       ""
+      ]
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": false
+     }
+    ]
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "labels",
+      "type": "multiselect",
+      "label": "L",
+      "options": [
+       "bug",
+       "p1"
+      ]
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": false
+     }
+    ]
+   }
+  },
+  {
+   "name": "ids",
+   "input": {
+    "fields": [
+     {
+      "id": " Priority ",
+      "type": "select",
+      "label": "P",
+      "required": 1,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "priority",
+      "type": "text",
+      "label": "dup"
+     },
+     {
+      "id": "1bad",
+      "type": "text",
+      "label": "x"
+     },
+     {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "type": "text",
+      "label": "long"
+     },
+     {
+      "id": "Kelvin",
+      "type": "text",
+      "label": "kelvin"
+     },
+     {
+      "id": "İd",
+      "type": "text",
+      "label": "dotted"
+     },
+     {
+      "id": "sev",
+      "type": "select",
+      "label": "S",
+      "options": []
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "T",
+      "options": [
+       "o0",
+       "o1",
+       "o2",
+       "o3",
+       "o4",
+       "o5",
+       "o6",
+       "o7",
+       "o8",
+       "o9",
+       "o10",
+       "o11",
+       "o12",
+       "o13",
+       "o14",
+       "o15",
+       "o16",
+       "o17",
+       "o18",
+       "o19",
+       "o20",
+       "o21",
+       "o22",
+       "o23",
+       "o24",
+       "o25",
+       "o26",
+       "o27",
+       "o28",
+       "o29",
+       "o30",
+       "o31",
+       "o32",
+       "o33",
+       "o34",
+       "o35",
+       "o36",
+       "o37",
+       "o38",
+       "o39"
+      ]
+     },
+     {
+      "id": "notype",
+      "label": "x"
+     },
+     {
+      "id": "zero",
+      "type": 0,
+      "label": "x"
+     },
+     {
+      "id": "custom_repo",
+      "type": "repo",
+      "label": "CR",
+      "allowCustom": "no"
+     },
+     {
+      "id": "req",
+      "type": "text",
+      "label": "R",
+      "required": "yes",
+      "placeholder": " ph "
+     },
+     {
+      "id": "req0",
+      "type": "text",
+      "label": "R",
+      "required": 0
+     }
+    ]
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "P",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "type": "text",
+      "label": "long"
+     },
+     {
+      "id": "kelvin",
+      "type": "text",
+      "label": "kelvin"
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "T",
+      "options": [
+       "o0",
+       "o1",
+       "o2",
+       "o3",
+       "o4",
+       "o5",
+       "o6",
+       "o7",
+       "o8",
+       "o9",
+       "o10",
+       "o11",
+       "o12",
+       "o13",
+       "o14",
+       "o15",
+       "o16",
+       "o17",
+       "o18",
+       "o19",
+       "o20",
+       "o21",
+       "o22",
+       "o23",
+       "o24",
+       "o25",
+       "o26",
+       "o27",
+       "o28",
+       "o29"
+      ]
+     },
+     {
+      "id": "custom_repo",
+      "type": "repo",
+      "label": "CR",
+      "allowCustom": true
+     },
+     {
+      "id": "req",
+      "type": "text",
+      "label": "R",
+      "required": true,
+      "placeholder": "ph"
+     },
+     {
+      "id": "req0",
+      "type": "text",
+      "label": "R"
+     }
+    ]
+   }
+  },
+  {
+   "name": "too many fields",
+   "input": {
+    "fields": [
+     {
+      "id": "f0",
+      "type": "text",
+      "label": "F0"
+     },
+     {
+      "id": "f1",
+      "type": "text",
+      "label": "F1"
+     },
+     {
+      "id": "f2",
+      "type": "text",
+      "label": "F2"
+     },
+     {
+      "id": "f3",
+      "type": "text",
+      "label": "F3"
+     },
+     {
+      "id": "f4",
+      "type": "text",
+      "label": "F4"
+     },
+     {
+      "id": "f5",
+      "type": "text",
+      "label": "F5"
+     },
+     {
+      "id": "f6",
+      "type": "text",
+      "label": "F6"
+     },
+     {
+      "id": "f7",
+      "type": "text",
+      "label": "F7"
+     },
+     {
+      "id": "f8",
+      "type": "text",
+      "label": "F8"
+     },
+     {
+      "id": "f9",
+      "type": "text",
+      "label": "F9"
+     },
+     {
+      "id": "f10",
+      "type": "text",
+      "label": "F10"
+     },
+     {
+      "id": "f11",
+      "type": "text",
+      "label": "F11"
+     },
+     {
+      "id": "f12",
+      "type": "text",
+      "label": "F12"
+     },
+     {
+      "id": "f13",
+      "type": "text",
+      "label": "F13"
+     },
+     {
+      "id": "f14",
+      "type": "text",
+      "label": "F14"
+     },
+     {
+      "id": "f15",
+      "type": "text",
+      "label": "F15"
+     },
+     {
+      "id": "f16",
+      "type": "text",
+      "label": "F16"
+     },
+     {
+      "id": "f17",
+      "type": "text",
+      "label": "F17"
+     },
+     {
+      "id": "f18",
+      "type": "text",
+      "label": "F18"
+     },
+     {
+      "id": "f19",
+      "type": "text",
+      "label": "F19"
+     },
+     {
+      "id": "f20",
+      "type": "text",
+      "label": "F20"
+     },
+     {
+      "id": "f21",
+      "type": "text",
+      "label": "F21"
+     },
+     {
+      "id": "f22",
+      "type": "text",
+      "label": "F22"
+     },
+     {
+      "id": "f23",
+      "type": "text",
+      "label": "F23"
+     },
+     {
+      "id": "f24",
+      "type": "text",
+      "label": "F24"
+     },
+     {
+      "id": "f25",
+      "type": "text",
+      "label": "F25"
+     },
+     {
+      "id": "f26",
+      "type": "text",
+      "label": "F26"
+     },
+     {
+      "id": "f27",
+      "type": "text",
+      "label": "F27"
+     },
+     {
+      "id": "f28",
+      "type": "text",
+      "label": "F28"
+     },
+     {
+      "id": "f29",
+      "type": "text",
+      "label": "F29"
+     }
+    ]
+   },
+   "want": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "f0",
+      "type": "text",
+      "label": "F0"
+     },
+     {
+      "id": "f1",
+      "type": "text",
+      "label": "F1"
+     },
+     {
+      "id": "f2",
+      "type": "text",
+      "label": "F2"
+     },
+     {
+      "id": "f3",
+      "type": "text",
+      "label": "F3"
+     },
+     {
+      "id": "f4",
+      "type": "text",
+      "label": "F4"
+     },
+     {
+      "id": "f5",
+      "type": "text",
+      "label": "F5"
+     },
+     {
+      "id": "f6",
+      "type": "text",
+      "label": "F6"
+     },
+     {
+      "id": "f7",
+      "type": "text",
+      "label": "F7"
+     },
+     {
+      "id": "f8",
+      "type": "text",
+      "label": "F8"
+     },
+     {
+      "id": "f9",
+      "type": "text",
+      "label": "F9"
+     },
+     {
+      "id": "f10",
+      "type": "text",
+      "label": "F10"
+     },
+     {
+      "id": "f11",
+      "type": "text",
+      "label": "F11"
+     },
+     {
+      "id": "f12",
+      "type": "text",
+      "label": "F12"
+     },
+     {
+      "id": "f13",
+      "type": "text",
+      "label": "F13"
+     },
+     {
+      "id": "f14",
+      "type": "text",
+      "label": "F14"
+     },
+     {
+      "id": "f15",
+      "type": "text",
+      "label": "F15"
+     },
+     {
+      "id": "f16",
+      "type": "text",
+      "label": "F16"
+     },
+     {
+      "id": "f17",
+      "type": "text",
+      "label": "F17"
+     },
+     {
+      "id": "f18",
+      "type": "text",
+      "label": "F18"
+     },
+     {
+      "id": "f19",
+      "type": "text",
+      "label": "F19"
+     }
+    ]
+   }
+  }
+ ],
+ "validate": [
+  {
+   "name": "ok preset object",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "repo id string",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": "repo_b",
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_b",
+     "targetRepoLabel": "botmux-clients",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "repo free string",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": "my-fork",
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoLabel": "my-fork",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "repo object label",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "label": " fork "
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoLabel": "fork",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "repo object null id",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": null,
+     "label": "fork2"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoLabel": "fork2",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "repo unknown id object",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "nope"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "repo_required",
+    "field": "repo"
+   }
+  },
+  {
+   "name": "repo array",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": [
+     "repo_a"
+    ],
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "repo_required",
+    "field": "repo"
+   }
+  },
+  {
+   "name": "repo number",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": 5,
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "repo_required",
+    "field": "repo"
+   }
+  },
+  {
+   "name": "missing title",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "   ",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "title_required",
+    "field": "title"
+   }
+  },
+  {
+   "name": "title number",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": 42,
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "42",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "title long",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "labels string",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "labels": "ux， p1 ,, "
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "labels": [
+      "ux",
+      "p1"
+     ],
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "labels array",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "labels": [
+     " a ",
+     "",
+     null,
+     3
+    ]
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "labels": [
+      "a",
+      "3"
+     ],
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "labels empty",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "labels": ""
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "labels many",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "labels": [
+     "l0",
+     "l1",
+     "l2",
+     "l3",
+     "l4",
+     "l5",
+     "l6",
+     "l7",
+     "l8",
+     "l9",
+     "l10",
+     "l11",
+     "l12",
+     "l13",
+     "l14",
+     "l15",
+     "l16",
+     "l17",
+     "l18",
+     "l19",
+     "l20",
+     "l21",
+     "l22",
+     "l23",
+     "l24",
+     "l25",
+     "l26",
+     "l27",
+     "l28",
+     "l29"
+    ]
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "labels": [
+      "l0",
+      "l1",
+      "l2",
+      "l3",
+      "l4",
+      "l5",
+      "l6",
+      "l7",
+      "l8",
+      "l9",
+      "l10",
+      "l11",
+      "l12",
+      "l13",
+      "l14",
+      "l15",
+      "l16",
+      "l17",
+      "l18",
+      "l19"
+     ],
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "select invalid",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p9",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "invalid_option",
+    "field": "priority"
+   }
+  },
+  {
+   "name": "select missing",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "field_required",
+    "field": "priority"
+   }
+  },
+  {
+   "name": "multiselect ok string",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "tags": "a，b"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "tags": [
+       "a",
+       "b"
+      ],
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "multiselect ok array",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "tags": [
+     "c",
+     "a"
+    ]
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "tags": [
+       "c",
+       "a"
+      ],
+      "env": "prod"
+     }
+    }
+   }
+  },
+  {
+   "name": "multiselect invalid",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod",
+    "tags": [
+     "z"
+    ]
+   },
+   "want": {
+    "ok": false,
+    "reason": "invalid_option",
+    "field": "tags"
+   }
+  },
+  {
+   "name": "text required missing",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": null
+   },
+   "want": {
+    "ok": false,
+    "reason": "field_required",
+    "field": "env"
+   }
+  },
+  {
+   "name": "text number",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "body": "b",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": 1.5,
+    "notes": {
+     "a": 1
+    }
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "b",
+     "targetRepoId": "repo_a",
+     "targetRepoLabel": "platform",
+     "customFields": {
+      "priority": "p0",
+      "notes": "[object Object]",
+      "env": "1.5"
+     }
+    }
+   }
+  },
+  {
+   "name": "body missing",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "标题",
+      "required": true,
+      "placeholder": "一句话说明问题"
+     },
+     {
+      "id": "body",
+      "type": "textarea",
+      "label": "问题描述",
+      "required": true,
+      "placeholder": "现象、复现步骤、期望结果…"
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "目标仓库",
+      "required": true,
+      "allowCustom": true
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "标签",
+      "placeholder": "逗号分隔，如 bug, p1"
+     },
+     {
+      "id": "priority",
+      "type": "select",
+      "label": "优先级",
+      "required": true,
+      "options": [
+       "p0",
+       "p1"
+      ]
+     },
+     {
+      "id": "tags",
+      "type": "multiselect",
+      "label": "Tags",
+      "options": [
+       "a",
+       "b",
+       "c"
+      ]
+     },
+     {
+      "id": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     },
+     {
+      "id": "env",
+      "type": "text",
+      "label": "Env",
+      "required": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "repo": {
+     "id": "repo_a"
+    },
+    "priority": "p0",
+    "env": "prod"
+   },
+   "want": {
+    "ok": false,
+    "reason": "body_required",
+    "field": "body"
+   }
+  },
+  {
+   "name": "strict repo free text",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "required": true
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": false
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "L",
+      "required": true
+     },
+     {
+      "id": "body",
+      "type": "text",
+      "label": "B"
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "repo": "free",
+    "labels": "x"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "",
+     "labels": [
+      "x"
+     ]
+    }
+   }
+  },
+  {
+   "name": "strict labels missing",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "required": true
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": false
+     },
+     {
+      "id": "labels",
+      "type": "text",
+      "label": "L",
+      "required": true
+     },
+     {
+      "id": "body",
+      "type": "text",
+      "label": "B"
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "repo": "free"
+   },
+   "want": {
+    "ok": false,
+    "reason": "labels_required",
+    "field": "labels"
+   }
+  },
+  {
+   "name": "optional repo none",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "required": true
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t"
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": ""
+    }
+   }
+  },
+  {
+   "name": "optional repo free",
+   "form": {
+    "fields": [
+     {
+      "id": "title",
+      "type": "text",
+      "label": "T",
+      "required": true
+     },
+     {
+      "id": "repo",
+      "type": "repo",
+      "label": "R",
+      "allowCustom": true
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "title": "t",
+    "repo": {
+     "label": "L"
+    }
+   },
+   "want": {
+    "ok": true,
+    "value": {
+     "title": "t",
+     "body": "",
+     "targetRepoLabel": "L"
+    }
+   }
+  },
+  {
+   "name": "no title field",
+   "form": {
+    "fields": [
+     {
+      "id": "body",
+      "type": "text",
+      "label": "B"
+     }
+    ]
+   },
+   "presets": [
+    {
+     "id": "repo_a",
+     "label": "platform"
+    },
+    {
+     "id": "repo_b",
+     "label": "botmux-clients",
+     "remote": "org/botmux-clients"
+    }
+   ],
+   "values": {
+    "body": "x"
+   },
+   "want": {
+    "ok": false,
+    "reason": "title_required",
+    "field": "title"
+   }
+  }
+ ],
+ "default": {
+  "fields": [
+   {
+    "id": "title",
+    "type": "text",
+    "label": "标题",
+    "required": true,
+    "placeholder": "一句话说明问题"
+   },
+   {
+    "id": "body",
+    "type": "textarea",
+    "label": "问题描述",
+    "required": true,
+    "placeholder": "现象、复现步骤、期望结果…"
+   },
+   {
+    "id": "repo",
+    "type": "repo",
+    "label": "目标仓库",
+    "required": true,
+    "allowCustom": true
+   },
+   {
+    "id": "labels",
+    "type": "text",
+    "label": "标签",
+    "required": false,
+    "placeholder": "逗号分隔，如 bug, p1"
+   }
+  ]
+ }
+}

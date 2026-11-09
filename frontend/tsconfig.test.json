@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "isolatedModules": false,
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "../dist-frontend-test",
+    "types": ["node"]
+  },
+  "include": ["src/api.ts", "src/device-api.ts", "src/invite-flow.ts", "src/route.ts", "src/draft.ts", "src/version-stats.ts", "src/machine-version.ts", "src/credential-api.ts", "test/**/*.ts"]
+}

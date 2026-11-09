@@ -1,0 +1,11 @@
+node_modules
+dist/
+output/
+output_resource/
+*.log
+log/
+.env
+.env.*
+.DS_Store
+dist-test/
+dist-frontend-test/

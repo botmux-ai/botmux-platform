@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <script>
+      // 滚动发布自愈：发布期间新旧 pod 并存，浏览器可能拿到某版 index.html 却把入口 hash 资源的
+      // 请求打到缺该文件的 pod（服务端已改为返回 404，不再把 HTML 当 JS）。入口模块加载失败 →
+      // 限流强刷一次重取 index.html（收敛后即指向匹配 pod 的资源）。防循环：同一会话 10s 内至多刷一次。
+      window.addEventListener(
+        'error',
+        function (e) {
+          var t = e && e.target;
+          if (!t || t.tagName !== 'SCRIPT' || !t.src || !/\/assets\/.*\.js/.test(t.src)) return;
+          try {
+            var k = '__reload_stale_assets_at__';
+            if (Date.now() - (+sessionStorage.getItem(k) || 0) < 10000) return;
+            sessionStorage.setItem(k, String(Date.now()));
+          } catch (_) {}
+          location.reload();
+        },
+        true /* capture：资源加载错误不冒泡 */
+      );
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>botmux 平台</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
