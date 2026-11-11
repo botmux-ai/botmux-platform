@@ -13,9 +13,12 @@ import (
 // failure, but Hertz's server span only sees the final status. The proxy
 // records "this status came from upstream" in a per-request holder carried on
 // the request context; the success decider reads it back and counts a relayed
-// 5xx as success. Everything the platform writes itself (502 from a failed
-// round trip, 503 while shutting down, store errors, panics) is never marked
-// and stays a failure.
+// 5xx as success. The one platform-written answer marked the same way is "this
+// machine is not connected" (MarkMachineOffline). Everything else the platform
+// writes itself (502 from a failed round trip or cross-pod HTTP forward, 503
+// while shutting down, store errors, panics) is never marked and stays a
+// failure. A rejected WebSocket upgrade is written on the hijacked connection,
+// so the span records 200 for it and it never reaches the failure rate.
 
 type relayMarkerKey struct{}
 
@@ -37,6 +40,14 @@ func MarkRelayedStatus(ctx context.Context, status int) {
 	if marker, ok := ctx.Value(relayMarkerKey{}).(*RelayMarker); ok {
 		marker.status.Store(int64(status))
 	}
+}
+
+// MarkMachineOffline records a status the platform answered because no pod
+// holds the machine's tunnel. Like a relayed daemon status it reflects the
+// machine, not the platform. Not for a failed route read: whether the machine
+// is online is then unknown, and that answer must stay a failure.
+func MarkMachineOffline(ctx context.Context, status int) {
+	MarkRelayedStatus(ctx, status)
 }
 
 // Status returns the relayed status, or 0 when nothing was relayed.

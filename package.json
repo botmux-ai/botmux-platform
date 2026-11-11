@@ -23,7 +23,7 @@
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@arco-design/web-react": "^2.66.15",

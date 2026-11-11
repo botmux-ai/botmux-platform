@@ -1,0 +1,9 @@
+.git
+**/node_modules
+dist
+dist-*
+output
+output_resource
+log
+.env
+.env.*

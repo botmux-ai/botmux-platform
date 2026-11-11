@@ -380,3 +380,47 @@ func TestRouteWriteThrottleWindow(t *testing.T) {
 		}
 	}
 }
+
+// Token cache entries hold credentials: one without a positive TTL would never
+// expire, so it is refused; a delete removes only the value it expects.
+func TestTokenEntriesExpireAndDeleteOnlyTheExpectedValue(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(100, 0)
+	s := NewKVStore(NewMemoryKVWithClock(func() time.Time { return now }), "sandbox", time.Minute, time.Minute)
+	ctx := context.Background()
+	for _, other := range []string{s.RouteKey("k"), s.StreamKey("k"), s.SupportKey("k"), s.RevokedKey("k")} {
+		if s.TokenKey("k") == other {
+			t.Fatalf("token entries share the key %q with another kind", other)
+		}
+	}
+	for _, ttl := range []time.Duration{0, -time.Second} {
+		if err := s.SetToken(ctx, "k", "v", ttl); !errors.Is(err, ErrTokenTTL) {
+			t.Fatalf("ttl %v: err = %v", ttl, err)
+		}
+		if got, err := s.GetToken(ctx, "k"); got != "" || err != nil {
+			t.Fatalf("ttl %v stored %q (%v)", ttl, got, err)
+		}
+	}
+	if err := s.SetToken(ctx, "k", "v1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := s.DeleteToken(ctx, "k", "v0"); deleted || err != nil {
+		t.Fatalf("delete of another value = %v, %v", deleted, err)
+	}
+	if got, _ := s.GetToken(ctx, "k"); got != "v1" {
+		t.Fatalf("token = %q", got)
+	}
+	if deleted, err := s.DeleteToken(ctx, "k", "v1"); !deleted || err != nil {
+		t.Fatalf("delete = %v, %v", deleted, err)
+	}
+	if err := s.SetToken(ctx, "k", "v2", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if got, err := s.GetToken(ctx, "k"); got != "" || err != nil {
+		t.Fatalf("expired token = %q (%v)", got, err)
+	}
+	if _, err := (*KVStore)(nil).GetToken(ctx, "k"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("no store: %v", err)
+	}
+}

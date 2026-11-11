@@ -102,6 +102,7 @@ func (s *KVStore) RouteKey(id string) string   { return s.key("route", id) }
 func (s *KVStore) StreamKey(id string) string  { return s.key("stream", id) }
 func (s *KVStore) SupportKey(id string) string { return s.key("support", id) }
 func (s *KVStore) RevokedKey(id string) string { return s.key("revoked", id) }
+func (s *KVStore) TokenKey(id string) string   { return s.key("token", id) }
 
 func (s *KVStore) requireClient() (KVClient, error) {
 	if s == nil || s.client == nil {
@@ -193,6 +194,37 @@ func (s *KVStore) IsMachineTokenRevoked(ctx context.Context, machineID string, i
 		return true, nil
 	}
 	return *issuedAtMS < cutoff, nil
+}
+
+// ErrTokenTTL refuses a token cache entry without a positive TTL: Set with no
+// TTL never expires, and these entries hold credentials.
+var ErrTokenTTL = errors.New("store: token entry needs a positive TTL")
+
+// GetToken reads a credential provider's cross-pod token cache entry ("" when
+// absent). It and SetToken/DeleteToken implement credential.TokenStore.
+func (s *KVStore) GetToken(ctx context.Context, id string) (string, error) {
+	c, err := s.requireClient()
+	if err != nil {
+		return "", err
+	}
+	return getOptional(ctx, c, s.TokenKey(id))
+}
+func (s *KVStore) SetToken(ctx context.Context, id, value string, ttl time.Duration) error {
+	c, err := s.requireClient()
+	if err != nil {
+		return err
+	}
+	if ttl <= 0 {
+		return ErrTokenTTL
+	}
+	return c.Set(ctx, s.TokenKey(id), value, ttl)
+}
+func (s *KVStore) DeleteToken(ctx context.Context, id, expected string) (bool, error) {
+	c, err := s.requireClient()
+	if err != nil {
+		return false, err
+	}
+	return c.CompareAndDelete(ctx, s.TokenKey(id), expected)
 }
 
 func getOptional(ctx context.Context, c KVClient, key string) (string, error) {

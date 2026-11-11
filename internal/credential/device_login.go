@@ -1,6 +1,9 @@
 package credential
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // DeviceLogin is a vault platform authorized by a device login the browser
 // starts and then polls (begin → complete), instead of the Feishu OAuth
@@ -20,6 +23,24 @@ type DeviceLogin interface {
 	// Mint turns a stored credential into short-lived variables. keys opens
 	// rec.Sealed and seals any write-back.
 	Mint(ctx context.Context, keys *Keys, rec Record) MintResult
+}
+
+// TokenStore is the cross-pod KV a device login may keep the tokens it minted
+// in, so another pod can hand them out instead of minting again. Callers store
+// only sealed values and treat any error as a miss.
+type TokenStore interface {
+	// GetToken returns "" with a nil error when key holds nothing.
+	GetToken(ctx context.Context, key string) (string, error)
+	// SetToken stores value for ttl, which must be positive.
+	SetToken(ctx context.Context, key, value string, ttl time.Duration) error
+	// DeleteToken removes key only while it still holds expected.
+	DeleteToken(ctx context.Context, key, expected string) (bool, error)
+}
+
+// SharesTokens is implemented by a DeviceLogin that can share its minted
+// tokens across pods; the platform binds it to the coordination store.
+type SharesTokens interface {
+	WithTokenStore(TokenStore) DeviceLogin
 }
 
 // DeviceLoginDescriptor identifies a device-login platform.

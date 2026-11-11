@@ -26,7 +26,7 @@ dist/                  构建产物：bin/botmux-platform、web/、install.sh
 
 ## 本地开发
 
-需要 Go 1.22+ 和 Node.js 20+。
+需要 Go 1.22+ 和 Node.js 22+。
 
 ```bash
 npm install
@@ -38,6 +38,8 @@ npm start            # http://localhost:8080
 机器子域用 `m-<machineId>.localhost`（主流浏览器自动解析到 127.0.0.1，无需配置 hosts）。
 
 `npm run dev` 跳过测试直接构建并启动后端；前端热更新另开 `npm run dev:frontend`（Vite）。
+
+也可以用 Docker 试用：`docker compose up --build` 启动平台和 MongoDB，同样是 http://localhost:8080 和 `DEV_LOGIN`。设了 `SIGNING_SECRET` 时，重启后会话和已绑定的机器仍然有效。
 
 Botmux Desktop 使用 Cloud PKCE 登录时会直接调用 `POST /v1/desktop/auth/machine-bind`，以 Desktop access token 为授权，按与 `/api/bind` 相同的 owner CAS / retired tombstone 规则签发机器票；网页绑定码仍用于 headless CLI 与手动恢复。
 
@@ -77,6 +79,8 @@ curl -fsSL <平台地址>/install.sh | BOTMUX_PLATFORM_URL=<平台地址> sh && 
 - 入口网关透传 WebSocket，并调大空闲超时（控制隧道是长连接；daemon 侧有心跳和断线重连）。
 
 `npm run build` 产出 `dist/bin/botmux-platform`（静态二进制）、`dist/web/` 和 `dist/install.sh`。以 `NODE_ENV=production` 启动，并用 `WEB_DIR` / `BOTMUX_INSTALLER_FILE` 指向前端与安装脚本产物。进程在 listener 可服务后写 statusz `ready`，SIGTERM 时先转为非 ready 再排空长连接。
+
+`docker build -t botmux-platform .` 构建的镜像已包含上述三件产物并设好 `WEB_DIR` / `BOTMUX_INSTALLER_FILE`，监听 8080，以非 root 用户运行；生产环境按下表传入环境变量并设 `NODE_ENV=production`。
 
 ## 环境变量
 

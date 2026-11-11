@@ -206,9 +206,11 @@ func (h *MachineHandler) serveHTTP(w http.ResponseWriter, r *http.Request, machi
 			h.Dashboard.ProxyHTTP(w, r, machine, proxy.PlatformHeaders{})
 			return
 		}
-		if h.forwardToOwner(w, r, machineID, false) {
+		route := h.forwardToOwner(w, r, machineID, false)
+		if route == routeForwarded {
 			return
 		}
+		markOffline(r, route, http.StatusBadGateway)
 		text(w, http.StatusBadGateway, "机器当前不在线")
 		return
 	}
@@ -219,9 +221,11 @@ func (h *MachineHandler) serveHTTP(w http.ResponseWriter, r *http.Request, machi
 	if isTerminalPath {
 		local, ok := h.Registry.Get(machineID)
 		if !ok {
-			if h.forwardToOwner(w, r, machineID, false) {
+			route := h.forwardToOwner(w, r, machineID, false)
+			if route == routeForwarded {
 				return
 			}
+			markOffline(r, route, http.StatusServiceUnavailable)
 			reconnect(w)
 			return
 		}
@@ -345,7 +349,7 @@ func (h *MachineHandler) serveHTTP(w http.ResponseWriter, r *http.Request, machi
 
 	machine, ok := h.Registry.Get(machineID)
 	if !ok {
-		if h.forwardToOwner(w, r, machineID, false) {
+		if h.forwardToOwner(w, r, machineID, false) == routeForwarded {
 			return
 		}
 		reconnect(w)
@@ -435,7 +439,7 @@ func (h *MachineHandler) serveDesktopDashboard(w http.ResponseWriter, r *http.Re
 	}
 	setRequestTarget(r, target)
 	machine, local := h.Registry.Get(machineID)
-	if !local && h.forwardToOwner(w, r, machineID, false) {
+	if !local && h.forwardToOwner(w, r, machineID, false) == routeForwarded {
 		return
 	}
 
@@ -687,7 +691,7 @@ func (h *MachineHandler) serveWebSocket(w http.ResponseWriter, r *http.Request, 
 	if isTerminalPath {
 		local, ok := h.Registry.Get(machineID)
 		if !ok {
-			if h.forwardToOwner(w, r, machineID, true) {
+			if h.forwardToOwner(w, r, machineID, true) == routeForwarded {
 				return
 			}
 			rejectUpgrade(w, http.StatusBadGateway)
@@ -749,7 +753,7 @@ func (h *MachineHandler) serveWebSocket(w http.ResponseWriter, r *http.Request, 
 	}
 	machine, ok := h.Registry.Get(machineID)
 	if !ok {
-		if h.forwardToOwner(w, r, machineID, true) {
+		if h.forwardToOwner(w, r, machineID, true) == routeForwarded {
 			return
 		}
 		rejectUpgrade(w, http.StatusBadGateway)
@@ -826,16 +830,35 @@ func (h *MachineHandler) proxyWebSocket(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// ownerRoute is what forwardToOwner did with a request for a machine whose
+// tunnel is not on this pod.
+type ownerRoute int
+
+const (
+	// routeUnreadable: the route store read failed. The caller answers as for
+	// routeNone, but whether the machine is online is unknown.
+	routeUnreadable ownerRoute = iota
+	// routeNone: the route names no other pod (no route, a stale route to
+	// this pod, or the request was already forwarded here), so the machine
+	// is answered as offline.
+	routeNone
+	// routeForwarded: the request went to the owner pod, which (or the
+	// failed forward) has answered.
+	routeForwarded
+)
+
 // forwardToOwner forwards to the pod holding the tunnel. The loop guard only
-// prevents forwarding loops (the peer re-authenticates); a route read failure
-// is treated as "no route".
-func (h *MachineHandler) forwardToOwner(w http.ResponseWriter, r *http.Request, machineID string, websocket bool) bool {
+// prevents forwarding loops (the peer re-authenticates).
+func (h *MachineHandler) forwardToOwner(w http.ResponseWriter, r *http.Request, machineID string, websocket bool) ownerRoute {
 	if h.Routes == nil || r.Header.Get(proxy.ForwardHeader) != "" {
-		return false
+		return routeNone
 	}
 	owner, err := h.Routes.GetMachineRouteCached(r.Context(), machineID, store.RouteCacheOptions{PositiveTTL: store.MachineRouteCacheTTL})
-	if err != nil || owner == "" || owner == h.Config.SelfPodAddr {
-		return false
+	if err != nil {
+		return routeUnreadable
+	}
+	if owner == "" || owner == h.Config.SelfPodAddr {
+		return routeNone
 	}
 	if websocket {
 		forward := h.ForwardRawWS
@@ -854,7 +877,15 @@ func (h *MachineHandler) forwardToOwner(w http.ResponseWriter, r *http.Request, 
 			slog.Warn("proxy failure", "proxyPath", "peer_machine_http", "machineId", machineID, "owner", owner, "error", err)
 		}
 	}
-	return true
+	return routeForwarded
+}
+
+// markOffline keeps an answer for a machine no pod holds out of the failure
+// rate. After a failed route read the same answer still counts.
+func markOffline(r *http.Request, route ownerRoute, status int) {
+	if route == routeNone {
+		proxy.MarkMachineOffline(r.Context(), status)
+	}
 }
 
 // isTopLevelNavigation: a real browser navigation (address bar / link), not

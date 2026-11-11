@@ -1,0 +1,18 @@
+# Local trial with MongoDB: http://localhost:8080 signs in with DEV_LOGIN.
+# SIGNING_SECRET keeps sessions and machine tickets valid across restarts.
+services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo:/data/db
+  platform:
+    build: .
+    depends_on: [mongo]
+    ports:
+      - "8080:8080"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      SIGNING_SECRET: ${SIGNING_SECRET:-}
+
+volumes:
+  mongo:
