@@ -3,9 +3,9 @@
 [Botmux](https://github.com/deepcoldy/botmux) 的中心化平台：**飞书登录 + 反向隧道访问你各台机器上的 botmux dashboard + 团队协作**（团队与协作群、Issue 看板、机器协管者、个人凭据库）。
 后端为 Go/Hertz，前端为 React。
 
-<a href="https://github.com/botmux-ai/botmux-platform/releases/download/v0.1.0/botmux-platform-intro.mp4"><img src=".github/assets/intro.gif" alt="Botmux Platform 介绍：反向隧道、机器子域、绑定机器、机器总览、团队协作、个人凭据库、自托管" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/52136d9e-841e-4e52-a297-8dcad561c7dc"><img src=".github/assets/intro.gif" alt="Botmux Platform 介绍：反向隧道、机器子域、绑定机器、机器总览、团队协作、个人凭据库、自托管" width="100%"></a>
 
-▶ [观看完整讲解视频](https://github.com/botmux-ai/botmux-platform/releases/download/v0.1.0/botmux-platform-intro.mp4)（中文配音，约 3 分钟）
+▶ [观看完整讲解视频](https://github.com/user-attachments/assets/52136d9e-841e-4e52-a297-8dcad561c7dc)（中文配音，约 3 分钟）
 
 ## 架构
 
