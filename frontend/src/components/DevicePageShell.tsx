@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button, Space, Typography } from '@arco-design/web-react';
+import { ENVIRONMENTS } from '@edition/environments';
+import EnvironmentSwitcher from './EnvironmentSwitcher';
 
 export default function DevicePageShell({ title, subtitle, children, className = '' }: {
   title: string;
@@ -18,6 +20,7 @@ export default function DevicePageShell({ title, subtitle, children, className =
           <Button size="small" type="text" onClick={() => (location.href = '/mobile')}>移动版</Button>
           <Button size="small" type="text" onClick={() => (location.href = '/devices')}>设备</Button>
           <Button size="small" type="text" onClick={() => (location.href = '/credentials')}>凭据</Button>
+          <EnvironmentSwitcher environments={ENVIRONMENTS} variant="button" />
         </Space>
       </header>
       <main className={`app-wrap device-page-wrap ${className}`}>

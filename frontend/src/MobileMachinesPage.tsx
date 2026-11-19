@@ -3,6 +3,8 @@ import '@arco-design/web-react/dist/css/arco.css';
 import { Alert, Button, Card, Empty, Message, Spin, Tag, Typography } from '@arco-design/web-react';
 import { getMachines, getMe, loginHref, openMachine, type Machine, type Me } from './api';
 import { fmtAgo } from './util';
+import { ENVIRONMENTS } from '@edition/environments';
+import EnvironmentSwitcher from './components/EnvironmentSwitcher';
 
 export default function MobileMachinesPage() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
@@ -49,7 +51,10 @@ export default function MobileMachinesPage() {
           <div className="mobile-brand">botmux</div>
           <Typography.Text type="secondary">我的机器</Typography.Text>
         </div>
-        <a href="/?desktop=1">完整平台</a>
+        <div className="mobile-header-actions">
+          <EnvironmentSwitcher environments={ENVIRONMENTS} homePath="/mobile" variant="mobile" />
+          <a href="/?desktop=1">完整平台</a>
+        </div>
       </header>
       <main className="mobile-content">
         {me === undefined ? (

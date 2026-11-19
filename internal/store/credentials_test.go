@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,17 @@ func TestCredentialStoreFailsClosed(t *testing.T) {
 			_, ops["put pending"] = s.PutPending(ctx, "on_a", testDevicePlatform, credential.Sealed{}, "https://sso")
 			_, ops["get pending"] = s.GetPending(ctx, "on_a", "cp_1")
 			_, ops["pending for user"] = s.GetPendingForUser(ctx, "on_a")
+			_, ops["get consent"] = s.GetMachineConsent(ctx, "on_a", "m1")
+			_, ops["allow"] = s.AllowMachine(ctx, "on_a", "m1", "on_o", []string{"lark-cli"})
+			_, ops["list consents"] = s.ListMachineConsents(ctx, "on_a")
+			_, ops["revoke consent"] = s.RevokeMachineConsent(ctx, "on_a", "m1")
+			_, ops["create request"] = s.CreateRequest(ctx, CredentialRequestDoc{UnionID: "on_a"})
+			_, ops["recent requests"] = s.RecentRequests(ctx, "on_a", "", 0, 5)
+			_, ops["open requests"] = s.ListOpenRequests(ctx, "on_a", 5)
+			_, ops["get request"] = s.GetRequest(ctx, "on_a", "cr_1")
+			ops["merge request"] = s.MergeRequest(ctx, "cr_1", []string{"a:b"})
+			ops["drop consents"] = s.DropMachineConsentsFor(ctx, "on_a", CredentialPlatformLarkCLI)
+			ops["notified"] = s.MarkRequestNotified(ctx, "cr_1")
 			ops["indexes"] = s.EnsureIndexes(ctx)
 			for op, err := range ops {
 				if StoreReason(err) != "unavailable" {
@@ -466,6 +478,174 @@ func TestConsentTeamsJSON(t *testing.T) {
 	for _, bad := range []string{`"some"`, `null`, `[1]`, `{}`} {
 		if err := json.Unmarshal([]byte(bad), &c); err == nil {
 			t.Errorf("%s must be rejected", bad)
+		}
+	}
+}
+
+func TestMachineConsentLifecycle(t *testing.T) {
+	f := newCredentialFixture(t)
+	if _, err := f.store.GetMachineConsent(f.ctx, "on_a", "m1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent consent: %v", err)
+	}
+	first, err := f.store.AllowMachine(f.ctx, "on_a", "m1", "on_owner", []string{"lark-cli"})
+	if err != nil || first.ID != "on_a::m1" || first.OwnerUnionID != "on_owner" || strings.Join(first.Platforms, ",") != "lark-cli" ||
+		first.UpdatedAt != f.now.UnixMilli() {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+
+	// Same owner: platforms accumulate without duplicates.
+	f.now = f.now.Add(time.Minute)
+	more, err := f.store.AllowMachine(f.ctx, "on_a", "m1", "on_owner", []string{"lark-cli", "device-cli"})
+	if err != nil || strings.Join(more.Platforms, ",") != "lark-cli,device-cli" || more.UpdatedAt != f.now.UnixMilli() {
+		t.Fatalf("more = %+v, %v", more, err)
+	}
+
+	// Another owner replaces the record instead of extending it.
+	f.now = f.now.Add(time.Minute)
+	replaced, err := f.store.AllowMachine(f.ctx, "on_a", "m1", "on_new_owner", []string{"device-cli"})
+	if err != nil || replaced.OwnerUnionID != "on_new_owner" || strings.Join(replaced.Platforms, ",") != "device-cli" {
+		t.Fatalf("replaced = %+v, %v", replaced, err)
+	}
+	if docs := f.db.MemoryCollection("credential_machine_consents").Documents(); len(docs) != 1 {
+		t.Fatalf("documents = %v", docs)
+	}
+
+	// Listing and revoking are per person.
+	if _, err := f.store.AllowMachine(f.ctx, "on_b", "m1", "on_new_owner", []string{"lark-cli"}); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := f.store.ListMachineConsents(f.ctx, "on_a")
+	if err != nil || len(mine) != 1 || mine[0].UnionID != "on_a" {
+		t.Fatalf("list = %+v, %v", mine, err)
+	}
+	if none, err := f.store.ListMachineConsents(f.ctx, "on_nobody"); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("empty list = %#v, %v", none, err)
+	}
+	if removed, err := f.store.RevokeMachineConsent(f.ctx, "on_a", "m1"); err != nil || !removed {
+		t.Fatalf("revoke = %v, %v", removed, err)
+	}
+	if removed, err := f.store.RevokeMachineConsent(f.ctx, "on_a", "m1"); err != nil || removed {
+		t.Fatalf("second revoke = %v, %v", removed, err)
+	}
+	if _, err := f.store.GetMachineConsent(f.ctx, "on_b", "m1"); err != nil {
+		t.Fatalf("another person's consent was removed: %v", err)
+	}
+}
+
+func TestCredentialRequests(t *testing.T) {
+	f := newCredentialFixture(t)
+	create := func(unionID, machineID string) CredentialRequestDoc {
+		t.Helper()
+		doc, err := f.store.CreateRequest(f.ctx, CredentialRequestDoc{UnionID: unionID, MachineID: machineID, Missing: []string{"lark-cli:authorize"}, Platforms: []string{"lark-cli"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(time.Minute)
+		return doc
+	}
+	a := create("on_a", "m1")
+	b := create("on_a", "m2")
+	c := create("on_a", "m1")
+	create("on_b", "m1")
+
+	if !strings.HasPrefix(a.ID, "cr_") || a.ExpiresAt != a.CreatedAt+24*3600*1000 || !a.ExpireAt.Equal(time.UnixMilli(a.CreatedAt+30*24*3600*1000)) || a.NotifiedAt != 0 {
+		t.Fatalf("created = %+v", a)
+	}
+	if len(a.Scopes) != 0 || a.Scopes == nil {
+		t.Fatalf("scopes must be stored as an empty array: %#v", a.Scopes)
+	}
+
+	got, err := f.store.GetRequest(f.ctx, "on_a", b.ID)
+	if err != nil || got.ID != b.ID || got.MachineID != "m2" {
+		t.Fatalf("get = %+v, %v", got, err)
+	}
+	if _, err := f.store.GetRequest(f.ctx, "on_b", b.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another person's request: %v", err)
+	}
+
+	// Newest first, narrowed by machine, bounded by time and limit.
+	ids := func(docs []CredentialRequestDoc) string {
+		out := []string{}
+		for _, d := range docs {
+			out = append(out, d.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	all, err := f.store.RecentRequests(f.ctx, "on_a", "", 0, 10)
+	if err != nil || ids(all) != strings.Join([]string{c.ID, b.ID, a.ID}, ",") {
+		t.Fatalf("recent = %s, %v", ids(all), err)
+	}
+	m1, err := f.store.RecentRequests(f.ctx, "on_a", "m1", 0, 10)
+	if err != nil || ids(m1) != c.ID+","+a.ID {
+		t.Fatalf("machine recent = %s, %v", ids(m1), err)
+	}
+	newest, _ := f.store.RecentRequests(f.ctx, "on_a", "", 0, 1)
+	since, _ := f.store.RecentRequests(f.ctx, "on_a", "", b.CreatedAt, 10)
+	if ids(newest) != c.ID || ids(since) != c.ID+","+b.ID {
+		t.Fatalf("limit/since = %s / %s", ids(newest), ids(since))
+	}
+	if none, err := f.store.RecentRequests(f.ctx, "on_nobody", "", 0, 10); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("empty = %#v, %v", none, err)
+	}
+
+	if err := f.store.MarkRequestNotified(f.ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.MergeRequest(f.ctx, a.ID, []string{"base:record:read", "base:record:read"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.MergeRequest(f.ctx, a.ID, []string{"base:record:read", "base:field:read"}); err != nil {
+		t.Fatal(err)
+	}
+	merged, _ := f.store.GetRequest(f.ctx, "on_a", a.ID)
+	if merged.NotifiedAt == 0 || strings.Join(merged.Scopes, ",") != "base:record:read,base:field:read" {
+		t.Fatalf("merged = %+v", merged)
+	}
+	many := make([]string, 150)
+	for i := range many {
+		many[i] = fmt.Sprintf("s:%d", i)
+	}
+	if err := f.store.MergeRequest(f.ctx, a.ID, many); err != nil {
+		t.Fatal(err)
+	}
+	capped, _ := f.store.GetRequest(f.ctx, "on_a", a.ID)
+	if len(capped.Scopes) != 100 || capped.Scopes[2] != "s:0" {
+		t.Fatalf("capped = %d scopes", len(capped.Scopes))
+	}
+
+	// Past 24 hours a request is gone for GetRequest and the open list; the
+	// stored record stays for the daily caps until the TTL index removes it.
+	f.now = f.now.Add(24 * time.Hour)
+	if _, err := f.store.GetRequest(f.ctx, "on_a", a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired request: %v", err)
+	}
+	open, err := f.store.ListOpenRequests(f.ctx, "on_a", 5)
+	if err != nil || ids(open) != "" {
+		t.Fatalf("open = %s, %v", ids(open), err)
+	}
+	if recent, _ := f.store.RecentRequests(f.ctx, "on_a", "", 0, 10); len(recent) != 3 {
+		t.Fatalf("recent = %d", len(recent))
+	}
+}
+
+func TestListOpenRequestsIsBoundedAndNewestFirst(t *testing.T) {
+	f := newCredentialFixture(t)
+	var want []string
+	for i := 0; i < 7; i++ {
+		doc, err := f.store.CreateRequest(f.ctx, CredentialRequestDoc{UnionID: "on_a", MachineID: "m1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append([]string{doc.ID}, want...)
+		f.now = f.now.Add(time.Minute)
+	}
+	open, err := f.store.ListOpenRequests(f.ctx, "on_a", 5)
+	if err != nil || len(open) != 5 {
+		t.Fatalf("open = %d, %v", len(open), err)
+	}
+	for i, doc := range open {
+		if doc.ID != want[i] {
+			t.Fatalf("open[%d] = %s, want %s", i, doc.ID, want[i])
 		}
 	}
 }

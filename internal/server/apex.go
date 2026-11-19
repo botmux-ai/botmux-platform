@@ -119,6 +119,10 @@ func (a *Apex) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if a.handleMachineCredentialsAPI(w, r) {
 			return
 		}
+	case path == "/v1/machine/credential-request":
+		if a.handleMachineCredentialRequestAPI(w, r) {
+			return
+		}
 	case hasPathPrefix(path, "/v1/machine/groups"):
 		if a.handleMachineGroupsAPI(w, r) {
 			return

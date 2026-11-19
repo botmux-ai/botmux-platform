@@ -869,3 +869,241 @@ func TestLarkAuthorizeIncrementalScopesSurviveTheCap(t *testing.T) {
 		t.Fatalf("capped incremental scope = %d %q … %q", len(scopes), scopes[:2], scopes[len(scopes)-1])
 	}
 }
+
+// ---- authorization requests, machine allowances ----
+
+func (e *requestTestEnv) ask(unionID string, tools ...string) string {
+	e.t.Helper()
+	r := e.request(requestBody(unionID, tools...), e.token(), "")
+	var a requestAnswer
+	if err := json.Unmarshal(r.Body.Bytes(), &a); err != nil || a.RequestID == "" {
+		e.t.Fatalf("ask = %d %s", r.Code, r.Body.String())
+	}
+	return a.RequestID
+}
+
+func TestCredentialRequestPageShowsLiveItemsToTheAddresseeOnly(t *testing.T) {
+	env := newRequestTestEnv(t)
+	id := env.ask("u-carol", "lark-cli", "device-cli")
+	path := "/api/credentials/requests/" + id
+
+	recorder := env.do(path, credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Request        credentialRequestView   `json:"request"`
+		Items          []credentialRequestItem `json:"items"`
+		MachineChanged bool                    `json:"machineChanged"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Request.ID != id || body.Request.OwnerName != "Alice" || body.Request.MachineName != "alice-box" ||
+		body.MachineChanged || len(body.Items) != 2 ||
+		body.Items[0] != (credentialRequestItem{Platform: "lark-cli", Title: "飞书", State: "authorize"}) ||
+		body.Items[1] != (credentialRequestItem{Platform: "device-cli", Title: "Device", State: "authorize"}) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+
+	// Items are live: once the person is ready they say so.
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	env.allowMachine("u-carol", "u-alice", "lark-cli")
+	live := env.do(path, credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))})
+	if !strings.Contains(live.Body.String(), `{"platform":"lark-cli","title":"飞书","state":"ready"}`) ||
+		!strings.Contains(live.Body.String(), `"state":"authorize"}`) {
+		t.Fatalf("live = %s", live.Body.String())
+	}
+
+	// Nobody else can read it, whether it exists or not; anonymous is asked to log in.
+	assertCredentialResponse(t, env.do(path, credentialRequest{cookie: credentialStr(env.cookie("u-dave", 0))}), http.StatusNotFound, `{"error":"request_not_found"}`)
+	assertCredentialResponse(t, env.do(path, credentialRequest{cookie: credentialStr(env.cookie("u-alice", 0))}), http.StatusNotFound, `{"error":"request_not_found"}`)
+	assertCredentialResponse(t, env.do("/api/credentials/requests/cr_000000000000000000000000", credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))}), http.StatusNotFound, `{"error":"request_not_found"}`)
+	assertCredentialResponse(t, env.do(path, credentialRequest{cookie: credentialStr("")}), http.StatusUnauthorized, `{"error":"stale_session","loginUrl":"/auth/login"}`)
+	assertCredentialResponse(t, env.do(path, credentialRequest{method: http.MethodDelete, cookie: credentialStr(env.cookie("u-carol", 0))}), http.StatusMethodNotAllowed, `{"error":"method_not_allowed"}`)
+
+	// A request expires after 24 hours.
+	env.apex.Credentials.Now = nil
+	env.nowMS += 25 * 3600 * 1000
+	assertCredentialResponse(t, env.do(path, credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))}), http.StatusNotFound, `{"error":"request_not_found"}`)
+}
+
+func TestCredentialRequestAllowRecordsTheMachineConsent(t *testing.T) {
+	env := newRequestTestEnv(t)
+	id := env.ask("u-carol", "lark-cli")
+	path := "/api/credentials/requests/" + id + "/allow"
+	post := func(opts credentialRequest) *httptest.ResponseRecorder {
+		opts.method = http.MethodPost
+		return env.do(path, opts)
+	}
+
+	// Strict fresh SSO, and the exact Origin.
+	assertJSONError(t, post(credentialRequest{cookie: credentialStr(env.cookie("u-carol", 20*time.Minute))}), http.StatusUnauthorized, "stale_session")
+	assertJSONError(t, post(credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0)), origin: credentialStr("https://evil.test")}), http.StatusForbidden, "bad_origin")
+	assertJSONError(t, post(credentialRequest{cookie: credentialStr(env.cookie("u-dave", 0))}), http.StatusNotFound, "request_not_found")
+	if consents, _ := env.apex.CredentialStore.ListMachineConsents(context.Background(), "u-carol"); len(consents) != 0 {
+		t.Fatalf("a refused allow recorded %v", consents)
+	}
+
+	assertCredentialResponse(t, post(credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))}), http.StatusOK,
+		`{"ok":true,"machine":{"machineId":"m-alice","platforms":["lark-cli"]}}`)
+	consent, err := env.apex.CredentialStore.GetMachineConsent(context.Background(), "u-carol", "m-alice")
+	if err != nil || consent.OwnerUnionID != "u-alice" || len(consent.Platforms) != 1 {
+		t.Fatalf("consent = %+v (%v)", consent, err)
+	}
+	// Allowing again changes nothing.
+	assertCredentialResponse(t, post(credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))}), http.StatusOK,
+		`{"ok":true,"machine":{"machineId":"m-alice","platforms":["lark-cli"]}}`)
+	// The grant now succeeds on that basis once the credential exists.
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	if r := env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""); r.Code != http.StatusOK {
+		t.Fatalf("grant = %d %s", r.Code, r.Body.String())
+	}
+}
+
+func TestCredentialRequestAllowByTheOwnerIsANoOp(t *testing.T) {
+	env := newRequestTestEnv(t)
+	id, err := env.apex.CredentialStore.CreateRequest(context.Background(), store.CredentialRequestDoc{
+		UnionID: "u-alice", MachineID: "m-alice", OwnerUnionID: "u-alice", Platforms: []string{"lark-cli"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCredentialResponse(t, env.do("/api/credentials/requests/"+id.ID+"/allow", credentialRequest{method: http.MethodPost, cookie: credentialStr(env.cookie("u-alice", 0))}),
+		http.StatusOK, `{"ok":true,"machine":{"machineId":"m-alice","platforms":[]}}`)
+	if consents, _ := env.apex.CredentialStore.ListMachineConsents(context.Background(), "u-alice"); len(consents) != 0 {
+		t.Fatalf("the owner needs no consent: %v", consents)
+	}
+}
+
+func TestCredentialRequestAllowRefusesAMachineThatChangedHands(t *testing.T) {
+	env := newRequestTestEnv(t)
+	ctx := context.Background()
+	// A request made while the machine belonged to someone else.
+	old, err := env.apex.CredentialStore.CreateRequest(ctx, store.CredentialRequestDoc{
+		UnionID: "u-carol", MachineID: "m-alice", OwnerUnionID: "u-previous", Platforms: []string{"lark-cli"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := credentialStr(env.cookie("u-carol", 0))
+	assertCredentialResponse(t, env.do("/api/credentials/requests/"+old.ID+"/allow", credentialRequest{method: http.MethodPost, cookie: cookie}),
+		http.StatusConflict, `{"error":"machine_ownership_changed"}`)
+	if !strings.Contains(env.do("/api/credentials/requests/"+old.ID, credentialRequest{cookie: cookie}).Body.String(), `"machineChanged":true`) {
+		t.Fatal("the page must be told the machine changed")
+	}
+
+	// A machine that was unbound since the card was sent.
+	id := env.ask("u-carol", "lark-cli")
+	if err := env.repo.RetireMachine(ctx, "m-alice"); err != nil {
+		t.Fatal(err)
+	}
+	assertCredentialResponse(t, env.do("/api/credentials/requests/"+id+"/allow", credentialRequest{method: http.MethodPost, cookie: cookie}),
+		http.StatusConflict, `{"error":"machine_ownership_changed"}`)
+	if consents, _ := env.apex.CredentialStore.ListMachineConsents(ctx, "u-carol"); len(consents) != 0 {
+		t.Fatalf("recorded %v", consents)
+	}
+}
+
+func TestCredentialsListShowsMachinesAndOpenRequestsAndRevokeRemovesTheAllowance(t *testing.T) {
+	env := newRequestTestEnv(t)
+	cookie := credentialStr(env.cookie("u-carol", 0))
+	empty := decodeBody(t, env.do("/api/credentials", credentialRequest{cookie: cookie}))
+	if string(mustJSON(t, empty["machines"])) != `[]` || string(mustJSON(t, empty["requests"])) != `[]` {
+		t.Fatalf("empty = %v", empty)
+	}
+
+	id := env.ask("u-carol", "lark-cli")
+	env.allowMachine("u-carol", "u-alice", "lark-cli")
+	env.allowMachineAt("u-carol", "m-gone", "u-alice", "lark-cli")
+	var body struct {
+		Machines []credentialMachineBody `json:"machines"`
+		Requests []credentialRequestView `json:"requests"`
+	}
+	list := env.do("/api/credentials", credentialRequest{cookie: cookie})
+	if err := json.Unmarshal(list.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Requests) != 1 || body.Requests[0].ID != id || body.Requests[0].MachineName != "alice-box" {
+		t.Fatalf("requests = %s", list.Body.String())
+	}
+	byID := map[string]credentialMachineBody{}
+	for _, m := range body.Machines {
+		byID[m.MachineID] = m
+	}
+	if m := byID["m-alice"]; !m.Current || m.MachineName != "alice-box" || m.OwnerName != "Alice" || len(m.Platforms) != 1 {
+		t.Fatalf("m-alice = %+v", m)
+	}
+	if m := byID["m-gone"]; m.Current || m.MachineName != "" || m.OwnerName != "" {
+		t.Fatalf("m-gone = %+v", m)
+	}
+	// Only the person's own are listed.
+	other := decodeBody(t, env.do("/api/credentials", credentialRequest{cookie: credentialStr(env.cookie("u-dave", 0))}))
+	if string(mustJSON(t, other["machines"])) != `[]` || string(mustJSON(t, other["requests"])) != `[]` {
+		t.Fatalf("other = %v", other)
+	}
+
+	revoke := func(opts credentialRequest) *httptest.ResponseRecorder {
+		opts.method = http.MethodDelete
+		return env.do("/api/credentials/machines/m-alice", opts)
+	}
+	assertJSONError(t, revoke(credentialRequest{cookie: credentialStr(env.cookie("u-carol", 20*time.Minute))}), http.StatusUnauthorized, "stale_session")
+	assertJSONError(t, revoke(credentialRequest{cookie: cookie, origin: credentialStr("https://evil.test")}), http.StatusForbidden, "bad_origin")
+	// Someone else's revoke removes nothing of carol's.
+	assertCredentialResponse(t, revoke(credentialRequest{cookie: credentialStr(env.cookie("u-dave", 0))}), http.StatusOK, `{"ok":true,"removed":false}`)
+	assertCredentialResponse(t, revoke(credentialRequest{cookie: cookie}), http.StatusOK, `{"ok":true,"removed":true}`)
+	assertCredentialResponse(t, revoke(credentialRequest{cookie: cookie}), http.StatusOK, `{"ok":true,"removed":false}`)
+	// The allowance is gone: the machine is refused again.
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	assertJSONError(t, env.do("/api/credentials/machines/m-alice", credentialRequest{cookie: cookie}), http.StatusMethodNotAllowed, "method_not_allowed")
+}
+
+func TestRevokingACredentialDropsMachineAllowancesForThatPlatform(t *testing.T) {
+	env := newRequestTestEnv(t)
+	ctx := context.Background()
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	env.allowMachine("u-carol", "u-alice", "lark-cli", "device-cli")
+	env.allowMachineAt("u-carol", "m-other", "u-alice", "lark-cli")
+	assertCredentialResponse(t, env.do("/api/credentials/lark-cli", credentialRequest{method: http.MethodDelete, cookie: credentialStr(env.cookie("u-carol", 0))}),
+		http.StatusOK, `{"ok":true,"removed":true}`)
+	consents, err := env.apex.CredentialStore.ListMachineConsents(ctx, "u-carol")
+	if err != nil || len(consents) != 1 || consents[0].MachineID != "m-alice" || strings.Join(consents[0].Platforms, ",") != "device-cli" {
+		t.Fatalf("consents = %+v (%v)", consents, err)
+	}
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+}
+
+func (e *requestTestEnv) allowMachineAt(unionID, machineID, owner string, platforms ...string) {
+	e.t.Helper()
+	if _, err := e.apex.CredentialStore.AllowMachine(context.Background(), unionID, machineID, owner, platforms); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestCredentialRequestRoutesAreMatchedBeforeThePlatformRoute(t *testing.T) {
+	env := newRequestTestEnv(t)
+	cookie := credentialStr(env.cookie("u-carol", 0))
+	// Not request ids: they fall through to the platform route's own 404.
+	for _, path := range []string{"/api/credentials/requests/nope", "/api/credentials/requests/cr_1/allow", "/api/credentials/machines/"} {
+		assertCredentialResponse(t, env.do(path, credentialRequest{cookie: cookie}), http.StatusNotFound, `{"error":"not_found"}`)
+	}
+	// A real request id is served by the request route, not by a platform named "requests".
+	id := env.ask("u-carol", "lark-cli")
+	if r := env.do("/api/credentials/requests/"+id, credentialRequest{cookie: cookie}); r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `"request"`) {
+		t.Fatalf("get = %d %s", r.Code, r.Body.String())
+	}
+	// Vault disabled.
+	env.apex.Config.CredentialKEK = nil
+	assertCredentialResponse(t, env.do("/api/credentials/requests/"+id, credentialRequest{cookie: cookie}), http.StatusServiceUnavailable, `{"error":"credential_vault_disabled"}`)
+}

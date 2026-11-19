@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCredentialApi, CredentialApiError, MAX_REQUESTED_SCOPES, requestedScopesFrom } from '../src/credential-api';
+import { createCredentialApi, credentialOwner, CredentialApiError, MAX_REQUESTED_SCOPES, requestedScopesFrom, requestIdFrom, type PlatformCard } from '../src/credential-api';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -52,4 +52,65 @@ test('complete：按平台轮询设备码登录', async () => {
   const r = await api.complete('device-cli', 'cp_1');
   assert.equal(r.state, 'pending');
   assert.deepEqual(calls, ['POST /api/credentials/device-cli/complete {"pendingId":"cp_1"}']);
+});
+
+test('站点授权走独立的 /region 路由，撤销整张卡不带站点', async () => {
+  const calls: string[] = [];
+  const api = createCredentialApi(async (input, init) => {
+    calls.push(`${init?.method} ${String(input)} ${String(init?.body)}`);
+    return jsonResponse(200, { ok: true, removed: true, pendingId: 'cp_1', authUrl: 'https://sso.test/v' });
+  });
+  await api.authorizeRegion('device-cli', 'eu');
+  await api.revokeRegion('device-cli', 'eu');
+  await api.revoke('device-cli');
+  assert.deepEqual(calls, [
+    'POST /api/credentials/device-cli/region {"region":"eu"}',
+    'DELETE /api/credentials/device-cli/region?region=eu undefined',
+    'DELETE /api/credentials/device-cli undefined',
+  ]);
+});
+
+test('站点登录的记录和进行中的授权归到所属卡片', () => {
+  const region = { region: 'eu', site: 'eu-west', platform: 'device-cli--eu-west', title: '欧洲站点' };
+  const cards: PlatformCard[] = [
+    { platform: 'lark-cli', flow: 'oauth', available: true, title: '飞书', description: '' },
+    { platform: 'device-cli', flow: 'device', available: true, title: 'Device', description: '', regions: [region] },
+  ];
+  assert.equal(credentialOwner(cards, 'device-cli')?.card.platform, 'device-cli');
+  assert.equal(credentialOwner(cards, 'device-cli')?.region, undefined);
+  assert.deepEqual(credentialOwner(cards, 'device-cli--eu-west'), { card: cards[1], region });
+  assert.equal(credentialOwner(cards, 'device-cli--nowhere'), undefined);
+});
+
+test('授权请求：读取、允许、撤销机器允许走各自的路由', async () => {
+  const calls: string[] = [];
+  const api = createCredentialApi(async (input, init) => {
+    calls.push(`${init?.method ?? 'GET'} ${String(input)} ${String(init?.body)}`);
+    return jsonResponse(200, { ok: true, removed: true });
+  });
+  await api.getRequest('cr_0123456789abcdef01234567');
+  await api.allowRequest('cr_0123456789abcdef01234567');
+  await api.revokeMachine('m 1/x');
+  assert.deepEqual(calls, [
+    'GET /api/credentials/requests/cr_0123456789abcdef01234567 undefined',
+    'POST /api/credentials/requests/cr_0123456789abcdef01234567/allow undefined',
+    'DELETE /api/credentials/machines/m%201%2Fx undefined',
+  ]);
+});
+
+test('授权请求的错误码和 stale_session 的登录地址带给页面', async () => {
+  const gone = createCredentialApi(async () => jsonResponse(409, { error: 'machine_ownership_changed' }));
+  await assert.rejects(gone.allowRequest('cr_0123456789abcdef01234567'), (e: unknown) => e instanceof CredentialApiError && e.status === 409 && e.code === 'machine_ownership_changed');
+  const stale = createCredentialApi(async () => jsonResponse(401, { error: 'stale_session', loginUrl: '/auth/login' }));
+  await assert.rejects(stale.allowRequest('cr_0123456789abcdef01234567'), (e: unknown) => e instanceof CredentialApiError && e.code === 'stale_session' && e.loginUrl === '/auth/login');
+});
+
+test('?request= 只接受平台发出的请求编号', () => {
+  assert.equal(requestIdFrom('?request=cr_0123456789abcdef01234567'), 'cr_0123456789abcdef01234567');
+  assert.equal(requestIdFrom('?scope=a:b&request=cr_0123456789abcdef01234567&x=1'), 'cr_0123456789abcdef01234567');
+  assert.equal(requestIdFrom(''), undefined);
+  assert.equal(requestIdFrom('?request='), undefined);
+  assert.equal(requestIdFrom('?request=cr_short'), undefined);
+  assert.equal(requestIdFrom('?request=../../x'), undefined);
+  assert.equal(requestIdFrom('?request=CR_0123456789ABCDEF01234567'), undefined);
 });

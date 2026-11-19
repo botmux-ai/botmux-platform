@@ -25,11 +25,13 @@ import {
 } from './api';
 import { initialTheme, applyTheme, copyText } from './util';
 import { identifyUser, installCommand, INSTALL_HINT, SOURCE_LINK } from '@edition/app';
+import { ENVIRONMENTS } from '@edition/environments';
 import { acceptInviteAndClearOnSuccess, urlWithoutInvite } from './invite-flow';
 import Machines from './components/Machines';
 import Teams from './components/Teams';
 import IssueBoard from './components/IssueBoard';
 import VersionDashboard from './components/VersionDashboard';
+import EnvironmentSwitcher from './components/EnvironmentSwitcher';
 
 function initial(name: string): string {
   return (name || '?').trim().charAt(0).toUpperCase() || '?';
@@ -366,6 +368,7 @@ function NavLinks() {
       <a className="header-text-link" href="/devices">设备</a>
       <a className="header-text-link" href="/credentials">凭据</a>
       <a className="header-text-link" href="/mobile">移动版</a>
+      <EnvironmentSwitcher environments={ENVIRONMENTS} />
       {NAV_LINKS.map((l) => (
         <Tooltip key={l.href} content={l.label}>
           <a

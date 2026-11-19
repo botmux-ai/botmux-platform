@@ -319,6 +319,10 @@ func (p Providers) Mint(ctx context.Context, rec Record) MintResult {
 		return p.MintLark(ctx, rec)
 	}
 	provider := p.DeviceLogin(rec.Platform)
+	if _, primary, regional := p.RegionalLoginOf(rec.Platform); regional {
+		// A regional record is minted by its primary platform's provider.
+		provider = p.DeviceLogin(primary)
+	}
 	if provider == nil {
 		return mintFailed(MintUnavailable, "provider not configured")
 	}

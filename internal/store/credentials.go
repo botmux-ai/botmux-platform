@@ -16,7 +16,7 @@ import (
 )
 
 // CredentialStore is the credential vault repository (src/store/credentials.ts).
-// Three collections, all fail-closed like IssueStore:
+// Five collections, all fail-closed like IssueStore:
 //   - credentials: one per person per platform, _id = unionId::platform. Only
 //     the envelope-encrypted refresh credential plus non-secret metadata; the
 //     KEK never lives here. version is a CAS counter so two pods refreshing at
@@ -24,6 +24,11 @@ import (
 //   - credential_grants: one audit row per issuance, TTL 90 days.
 //   - credential_pending: device-login snapshots so begin and complete may
 //     land on different pods, TTL 1 hour.
+//   - credential_machine_consents: one per person per machine, _id =
+//     unionId::machineId: the services the person allowed that machine's owner
+//     to use their credential for. Bound to the owner at the time of the click.
+//   - credential_requests: authorization requests a machine raised for a
+//     person (the card's target page), TTL 30 days.
 type CredentialStore struct {
 	provider DatabaseProvider
 	now      func() time.Time
@@ -73,12 +78,19 @@ const (
 )
 
 const (
-	credentialsCollection       = "credentials"
-	credentialGrantsCollection  = "credential_grants"
-	credentialPendingCollection = "credential_pending"
+	credentialsCollection        = "credentials"
+	credentialGrantsCollection   = "credential_grants"
+	credentialPendingCollection  = "credential_pending"
+	machineConsentsCollection    = "credential_machine_consents"
+	credentialRequestsCollection = "credential_requests"
 
 	credentialGrantTTLMS   int64 = 90 * 24 * 3600 * 1000
 	credentialPendingTTLMS int64 = 60 * 60 * 1000
+	// credentialRequestValidMS is how long a request (and its card) can be used.
+	credentialRequestValidMS int64 = 24 * 3600 * 1000
+	credentialRequestTTLMS   int64 = 30 * 24 * 3600 * 1000
+	// MaxRequestScopes bounds the Feishu scopes one authorization request carries.
+	MaxRequestScopes = 100
 
 	defaultCredentialGrantLimit = 50
 )
@@ -207,7 +219,10 @@ type CredentialGrantDoc struct {
 	TurnID       string                 `json:"turnId,omitempty" bson:"turnId,omitempty"`
 	Outcome      CredentialGrantOutcome `json:"outcome" bson:"outcome"`
 	Reason       string                 `json:"reason,omitempty" bson:"reason,omitempty"`
-	At           int64                  `json:"at" bson:"at,truncate"`
+	// Basis is what allowed a granted use: self, team (team consent) or
+	// machine (the person allowed that machine).
+	Basis string `json:"basis,omitempty" bson:"basis,omitempty"`
+	At    int64  `json:"at" bson:"at,truncate"`
 	// ExpireAt is a BSON Date for the TTL index (physical cleanup only).
 	ExpireAt time.Time `json:"expireAt" bson:"expireAt"`
 }
@@ -238,6 +253,7 @@ type credentialGrantRecord struct {
 	TurnID       string                 `bson:"turnId,omitempty"`
 	Outcome      CredentialGrantOutcome `bson:"outcome"`
 	Reason       string                 `bson:"reason,omitempty"`
+	Basis        string                 `bson:"basis,omitempty"`
 	At           float64                `bson:"at"`
 	ExpireAt     time.Time              `bson:"expireAt"`
 }
@@ -281,6 +297,10 @@ func (s *CredentialStore) EnsureIndexes(ctx context.Context) error {
 		{credentialGrantsCollection, IndexSpec{Keys: []IndexKey{{Field: "unionId", Order: 1}, {Field: "machineId", Order: 1}, {Field: "outcome", Order: 1}}}},
 		{credentialGrantsCollection, IndexSpec{Keys: []IndexKey{{Field: "expireAt", Order: 1}}, ExpireAfterSeconds: &zero}},
 		{credentialPendingCollection, IndexSpec{Keys: []IndexKey{{Field: "expireAt", Order: 1}}, ExpireAfterSeconds: &zero}},
+		{machineConsentsCollection, IndexSpec{Keys: []IndexKey{{Field: "unionId", Order: 1}}}},
+		{credentialRequestsCollection, IndexSpec{Keys: []IndexKey{{Field: "unionId", Order: 1}, {Field: "machineId", Order: 1}, {Field: "createdAt", Order: -1}}}},
+		{credentialRequestsCollection, IndexSpec{Keys: []IndexKey{{Field: "unionId", Order: 1}, {Field: "createdAt", Order: -1}}}},
+		{credentialRequestsCollection, IndexSpec{Keys: []IndexKey{{Field: "expireAt", Order: 1}}, ExpireAfterSeconds: &zero}},
 	}
 	for _, item := range specs {
 		c, err := s.collection(ctx, item.collection)
@@ -587,6 +607,7 @@ type CredentialGrantInput struct {
 	TurnID       string
 	Outcome      CredentialGrantOutcome
 	Reason       string
+	Basis        string
 }
 
 // AppendGrant writes one audit row (best-effort).
@@ -599,7 +620,7 @@ func (s *CredentialStore) AppendGrant(ctx context.Context, in CredentialGrantInp
 	record := credentialGrantRecord{
 		ID: randomDocumentID("cg"), UnionID: in.UnionID, Platform: in.Platform, MachineID: in.MachineID,
 		MachineName: in.MachineName, OwnerUnionID: in.OwnerUnionID, AppID: in.AppID, SessionID: in.SessionID,
-		TurnID: in.TurnID, Outcome: in.Outcome, Reason: in.Reason,
+		TurnID: in.TurnID, Outcome: in.Outcome, Reason: in.Reason, Basis: in.Basis,
 		At: float64(at), ExpireAt: time.UnixMilli(at + credentialGrantTTLMS).UTC(),
 	}
 	if err := c.InsertOne(ctx, record); err != nil {
@@ -712,4 +733,244 @@ func (s *CredentialStore) DeletePending(ctx context.Context, id string) {
 		return
 	}
 	_, _ = c.DeleteOne(ctx, Document{"_id": id})
+}
+
+// ---- machine consents ----
+
+// MachineConsentDoc records that UnionID allowed machine MachineID, owned by
+// OwnerUnionID when the person clicked, to use their credential for Platforms.
+type MachineConsentDoc struct {
+	ID           string   `json:"_id" bson:"_id"`
+	UnionID      string   `json:"unionId" bson:"unionId"`
+	MachineID    string   `json:"machineId" bson:"machineId"`
+	OwnerUnionID string   `json:"ownerUnionId" bson:"ownerUnionId"`
+	Platforms    []string `json:"platforms" bson:"platforms"`
+	UpdatedAt    int64    `json:"updatedAt" bson:"updatedAt,truncate"`
+}
+
+func machineConsentID(unionID, machineID string) string { return unionID + "::" + machineID }
+
+// GetMachineConsent returns ErrNotFound when the person never allowed the machine.
+func (s *CredentialStore) GetMachineConsent(ctx context.Context, unionID, machineID string) (MachineConsentDoc, error) {
+	c, err := s.collection(ctx, machineConsentsCollection)
+	if err != nil {
+		return MachineConsentDoc{}, err
+	}
+	var doc MachineConsentDoc
+	if err := c.FindOne(ctx, Document{"_id": machineConsentID(unionID, machineID)}, &doc); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return MachineConsentDoc{}, ErrNotFound
+		}
+		return MachineConsentDoc{}, failClosed(err)
+	}
+	return doc, nil
+}
+
+// AllowMachine adds platforms to the person's consent for the machine. A
+// consent given under another owner is replaced, not extended.
+func (s *CredentialStore) AllowMachine(ctx context.Context, unionID, machineID, ownerUnionID string, platforms []string) (MachineConsentDoc, error) {
+	c, err := s.collection(ctx, machineConsentsCollection)
+	if err != nil {
+		return MachineConsentDoc{}, err
+	}
+	id := machineConsentID(unionID, machineID)
+	now := float64(s.nowMS())
+	r, err := c.UpdateOne(ctx, Document{"_id": id, "ownerUnionId": ownerUnionID}, Document{
+		"$addToSet": Document{"platforms": Document{"$each": platforms}},
+		"$set":      Document{"updatedAt": now},
+	}, false)
+	if err != nil {
+		return MachineConsentDoc{}, failClosed(err)
+	}
+	if r.Matched == 0 {
+		_, err := c.UpdateOne(ctx, Document{"_id": id}, Document{"$set": Document{
+			"unionId": unionID, "machineId": machineID, "ownerUnionId": ownerUnionID, "platforms": append([]string{}, platforms...),
+			"updatedAt": now,
+		}}, true)
+		if err != nil {
+			return MachineConsentDoc{}, failClosed(err)
+		}
+	}
+	return s.GetMachineConsent(ctx, unionID, machineID)
+}
+
+// ListMachineConsents returns every machine the person allowed.
+func (s *CredentialStore) ListMachineConsents(ctx context.Context, unionID string) ([]MachineConsentDoc, error) {
+	c, err := s.collection(ctx, machineConsentsCollection)
+	if err != nil {
+		return nil, err
+	}
+	var docs []MachineConsentDoc
+	opts := FindOptions{Sort: []IndexKey{{Field: "updatedAt", Order: -1}}}
+	if err := c.FindManyOptions(ctx, Document{"unionId": unionID}, opts, &docs); err != nil {
+		return nil, failClosed(err)
+	}
+	if docs == nil {
+		docs = []MachineConsentDoc{}
+	}
+	return docs, nil
+}
+
+// RevokeMachineConsent reports whether a consent existed.
+func (s *CredentialStore) RevokeMachineConsent(ctx context.Context, unionID, machineID string) (bool, error) {
+	c, err := s.collection(ctx, machineConsentsCollection)
+	if err != nil {
+		return false, err
+	}
+	r, err := c.DeleteOne(ctx, Document{"_id": machineConsentID(unionID, machineID), "unionId": unionID})
+	if err != nil {
+		return false, failClosed(err)
+	}
+	return r.Deleted > 0, nil
+}
+
+// DropMachineConsentsFor removes platform from every machine consent of the
+// person and deletes the consents left with no platform.
+func (s *CredentialStore) DropMachineConsentsFor(ctx context.Context, unionID string, platform CredentialPlatform) error {
+	c, err := s.collection(ctx, machineConsentsCollection)
+	if err != nil {
+		return err
+	}
+	if _, err := c.UpdateMany(ctx, Document{"unionId": unionID, "platforms": string(platform)}, Document{"$pull": Document{"platforms": string(platform)}}); err != nil {
+		return failClosed(err)
+	}
+	if _, err := c.DeleteMany(ctx, Document{"unionId": unionID, "platforms": Document{"$size": 0}}); err != nil {
+		return failClosed(err)
+	}
+	return nil
+}
+
+// ---- authorization requests ----
+
+// CredentialRequestDoc is one authorization request a machine raised for a
+// person. Missing lists "platform:state" entries; Platforms the services the
+// request names.
+type CredentialRequestDoc struct {
+	ID           string   `json:"_id" bson:"_id"`
+	UnionID      string   `json:"unionId" bson:"unionId"`
+	MachineID    string   `json:"machineId" bson:"machineId"`
+	OwnerUnionID string   `json:"ownerUnionId" bson:"ownerUnionId"`
+	OwnerName    string   `json:"ownerName" bson:"ownerName"`
+	MachineName  string   `json:"machineName" bson:"machineName"`
+	AppID        string   `json:"appId" bson:"appId"`
+	BotName      string   `json:"botName" bson:"botName"`
+	Platforms    []string `json:"platforms" bson:"platforms"`
+	Scopes       []string `json:"scopes" bson:"scopes"`
+	Missing      []string `json:"missing" bson:"missing"`
+	NotifiedAt   int64    `json:"notifiedAt,omitempty" bson:"notifiedAt,omitempty,truncate"`
+	CreatedAt    int64    `json:"createdAt" bson:"createdAt,truncate"`
+	// ExpiresAt is the logical end of the request; ExpireAt is the BSON Date of
+	// the TTL index (physical cleanup only).
+	ExpiresAt int64     `json:"expiresAt" bson:"expiresAt,truncate"`
+	ExpireAt  time.Time `json:"expireAt" bson:"expireAt"`
+}
+
+// CreateRequest stores a new request; ID and the timestamps are assigned here.
+func (s *CredentialStore) CreateRequest(ctx context.Context, doc CredentialRequestDoc) (CredentialRequestDoc, error) {
+	c, err := s.collection(ctx, credentialRequestsCollection)
+	if err != nil {
+		return CredentialRequestDoc{}, err
+	}
+	now := s.nowMS()
+	doc.ID, doc.CreatedAt, doc.ExpiresAt = randomDocumentID("cr"), now, now+credentialRequestValidMS
+	doc.ExpireAt = time.UnixMilli(now + credentialRequestTTLMS).UTC()
+	doc.NotifiedAt = 0
+	doc.Platforms, doc.Scopes, doc.Missing = append([]string{}, doc.Platforms...), append([]string{}, doc.Scopes...), append([]string{}, doc.Missing...)
+	if err := c.InsertOne(ctx, doc); err != nil {
+		return CredentialRequestDoc{}, failClosed(err)
+	}
+	return doc, nil
+}
+
+// RecentRequests returns the person's requests created since sinceMS, newest
+// first; a non-empty machineID narrows them to that machine.
+func (s *CredentialStore) RecentRequests(ctx context.Context, unionID, machineID string, sinceMS int64, limit int) ([]CredentialRequestDoc, error) {
+	filter := Document{"unionId": unionID, "createdAt": Document{"$gte": sinceMS}}
+	if machineID != "" {
+		filter["machineId"] = machineID
+	}
+	return s.findRequests(ctx, filter, limit)
+}
+
+// ListOpenRequests returns the person's requests that have not expired, newest first.
+func (s *CredentialStore) ListOpenRequests(ctx context.Context, unionID string, limit int) ([]CredentialRequestDoc, error) {
+	if s == nil {
+		return nil, ErrUnavailable
+	}
+	return s.findRequests(ctx, Document{"unionId": unionID, "expiresAt": Document{"$gt": s.nowMS()}}, limit)
+}
+
+func (s *CredentialStore) findRequests(ctx context.Context, filter Document, limit int) ([]CredentialRequestDoc, error) {
+	c, err := s.collection(ctx, credentialRequestsCollection)
+	if err != nil {
+		return nil, err
+	}
+	var docs []CredentialRequestDoc
+	opts := FindOptions{Sort: []IndexKey{{Field: "createdAt", Order: -1}}, Limit: int64(limit)}
+	if err := c.FindManyOptions(ctx, filter, opts, &docs); err != nil {
+		return nil, failClosed(err)
+	}
+	if docs == nil {
+		docs = []CredentialRequestDoc{}
+	}
+	return docs, nil
+}
+
+// GetRequest returns the person's own request by id; ErrNotFound when absent,
+// addressed to someone else, or past its logical expiry.
+func (s *CredentialStore) GetRequest(ctx context.Context, unionID, id string) (CredentialRequestDoc, error) {
+	c, err := s.collection(ctx, credentialRequestsCollection)
+	if err != nil {
+		return CredentialRequestDoc{}, err
+	}
+	var doc CredentialRequestDoc
+	if err := c.FindOne(ctx, Document{"_id": id, "unionId": unionID}, &doc); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return CredentialRequestDoc{}, ErrNotFound
+		}
+		return CredentialRequestDoc{}, failClosed(err)
+	}
+	if doc.ExpiresAt < s.nowMS() {
+		return CredentialRequestDoc{}, ErrNotFound
+	}
+	return doc, nil
+}
+
+// MergeRequest adds scopes to a request that already covers the services asked
+// for, keeping at most MaxRequestScopes scopes in all.
+func (s *CredentialStore) MergeRequest(ctx context.Context, id string, scopes []string) error {
+	c, err := s.collection(ctx, credentialRequestsCollection)
+	if err != nil {
+		return err
+	}
+	var doc CredentialRequestDoc
+	if err := c.FindOne(ctx, Document{"_id": id}, &doc); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return failClosed(err)
+	}
+	merged := append([]string{}, doc.Scopes...)
+	have := make(map[string]bool, len(merged))
+	for _, scope := range merged {
+		have[scope] = true
+	}
+	for _, scope := range scopes {
+		if !have[scope] && len(merged) < MaxRequestScopes {
+			have[scope] = true
+			merged = append(merged, scope)
+		}
+	}
+	_, err = c.UpdateOne(ctx, Document{"_id": id}, Document{"$set": Document{"scopes": merged}}, false)
+	return failClosed(err)
+}
+
+// MarkRequestNotified records that the card reached the person.
+func (s *CredentialStore) MarkRequestNotified(ctx context.Context, id string) error {
+	c, err := s.collection(ctx, credentialRequestsCollection)
+	if err != nil {
+		return err
+	}
+	_, err = c.UpdateOne(ctx, Document{"_id": id}, Document{"$set": Document{"notifiedAt": s.nowMS()}}, false)
+	return failClosed(err)
 }

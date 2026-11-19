@@ -100,6 +100,16 @@ type CredentialFirstUseMessage struct {
 	ManageURL   string
 }
 
+// CredentialRequestMessage asks a person to authorize Services and allow the
+// machine to use them; AuthorizeURL is the page that does both.
+type CredentialRequestMessage struct {
+	BotName      string
+	OwnerName    string
+	MachineName  string
+	Services     []string
+	AuthorizeURL string
+}
+
 // DeviceConfirmMessage is the F1 enroll confirmation card (link only, no
 // credential material).
 type DeviceConfirmMessage struct {
@@ -188,6 +198,39 @@ func (c *Client) SendCredentialFirstUseDM(ctx context.Context, unionID string, i
 	return c.sendInteractive(ctx, token, "union_id", unionID, card("blue", "botmux：你的授权首次在一台新机器上使用",
 		markdownDiv(content),
 		primaryButton("查看 / 管理我的凭据", info.ManageURL),
+	))
+}
+
+// SendCredentialRequestDM asks the person to authorize the services a machine's
+// bot needs. The text names who is asking and what the click allows.
+func (c *Client) SendCredentialRequestDM(ctx context.Context, unionID string, info CredentialRequestMessage) error {
+	if !c.Configured() || unionID == "" {
+		return ErrNotConfigured
+	}
+	token, err := c.TenantAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	services := make([]string, len(info.Services))
+	for i, service := range info.Services {
+		services[i] = "**" + escapeMarkdown(service) + "**"
+	}
+	bot := "一个未命名的 bot"
+	if info.BotName != "" {
+		bot = "bot **" + escapeMarkdown(info.BotName) + "**"
+	}
+	machine := escapeMarkdown(info.OwnerName) + "的机器"
+	if info.MachineName != "" {
+		machine += "「" + escapeMarkdown(info.MachineName) + "」"
+	}
+	content := strings.Join([]string{
+		bot + " 想以你的身份使用 " + strings.Join(services, "、") + "。",
+		"允许后，" + machine + "上的 bot 可以用你的身份使用这些服务。机器主人能控制这台机器，只允许你信任的人的机器。可随时在凭据页的「允许使用的机器」里撤销。",
+		"如果不是你刚刚让它做的事，请忽略这条消息。",
+	}, "\n")
+	return c.sendInteractive(ctx, token, "union_id", unionID, card("blue", "botmux：有 bot 请求使用你的授权",
+		markdownDiv(content),
+		primaryButton("授权", info.AuthorizeURL),
 	))
 }
 

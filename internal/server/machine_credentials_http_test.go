@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -281,7 +282,7 @@ func TestCredentialGrantSuccessAuditsAndNotifiesOnce(t *testing.T) {
 		t.Fatalf("grants = %s", list.Body.String())
 	}
 	if !strings.HasPrefix(string(grants.Grants[0]), `{"at":`) ||
-		!strings.HasSuffix(string(grants.Grants[0]), `,"platform":"lark-cli","machineId":"m-alice","machineName":"alice-box","ownerUnionId":"u-alice","appId":"cli_bot","outcome":"granted"}`) {
+		!strings.HasSuffix(string(grants.Grants[0]), `,"platform":"lark-cli","machineId":"m-alice","machineName":"alice-box","ownerUnionId":"u-alice","appId":"cli_bot","outcome":"granted","basis":"team"}`) {
 		t.Fatalf("grant entry = %s", grants.Grants[0])
 	}
 }
@@ -430,6 +431,201 @@ func TestCredentialGrantLimiterWindow(t *testing.T) {
 	}
 	if _, limited := limiter.take("m", 61_000); limited {
 		t.Fatal("a new window starts after a minute")
+	}
+}
+
+// consentGrantBody is a grant from a daemon that understands machine consent.
+func consentGrantBody(unionID, tool string) string {
+	return strings.TrimSuffix(grantBody(unionID, tool), "}") + `,"machineConsent":true}`
+}
+
+// allowMachine records that unionID allowed m-alice while it belonged to owner.
+func (e *grantTestEnv) allowMachine(unionID, owner string, platforms ...string) {
+	e.t.Helper()
+	if _, err := e.apex.CredentialStore.AllowMachine(context.Background(), unionID, "m-alice", owner, platforms); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+const consentMissingBody = `{"error":"consent_missing","authorizeUrl":"http://localhost/credentials"}`
+
+func TestCredentialGrantWithoutMachineConsentFlagKeepsTodaysAnswers(t *testing.T) {
+	env := newGrantTestEnv(t)
+	// A stranger with or without a credential: not_teammate, as before.
+	assertCredentialResponse(t, env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, `{"error":"not_teammate"}`)
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	assertCredentialResponse(t, env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, `{"error":"not_teammate"}`)
+	// A teammate whose consent excludes the team: consent_missing, as before.
+	other := store.ConsentToTeams([]string{"t-other"})
+	env.authorize("u-bob", store.CredentialPlatformLarkCLI, &other)
+	assertCredentialResponse(t, env.grant(grantBody("u-bob", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	// A flag that is not the boolean true is not the flag.
+	for _, flag := range []string{`"true"`, `1`, `false`, `null`} {
+		body := strings.TrimSuffix(grantBody("u-dave", "lark-cli"), "}") + `,"machineConsent":` + flag + `}`
+		assertCredentialResponse(t, env.grant(body, env.token(), ""), http.StatusForbidden, `{"error":"not_teammate"}`)
+	}
+	if env.mintCalls != 0 {
+		t.Fatal("must not mint")
+	}
+}
+
+func TestCredentialGrantMachineConsentFlagAsksForConsentNotCredentials(t *testing.T) {
+	env := newGrantTestEnv(t)
+	// No credential at all: the answer is still consent_missing, never
+	// credential_not_found, so a stranger learns nothing about credentials.
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	if audit := env.grants("u-carol"); len(audit) != 1 || audit[0]["outcome"] != "refused" || audit[0]["reason"] != "consent_missing" {
+		t.Fatalf("audit = %v", audit)
+	}
+	// The owner and teammates are unaffected by the flag.
+	if r := env.grant(consentGrantBody("u-bob", "lark-cli"), env.token(), ""); r.Code != http.StatusNotFound {
+		t.Fatalf("teammate without credential = %d %s", r.Code, r.Body.String())
+	}
+}
+
+func TestCredentialGrantMachineConsentGrantsOnceAndNotifiesOnce(t *testing.T) {
+	env := newGrantTestEnv(t)
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	env.allowMachine("u-carol", "u-alice", "lark-cli")
+	for _, body := range []string{grantBody("u-carol", "lark-cli"), consentGrantBody("u-carol", "lark-cli")} {
+		if r := env.grant(body, env.token(), ""); r.Code != http.StatusOK {
+			t.Fatalf("grant = %d %s", r.Code, r.Body.String())
+		}
+	}
+	audit := env.grants("u-carol")
+	if len(audit) != 2 || audit[0]["outcome"] != "granted" || audit[0]["basis"] != "machine" || audit[1]["basis"] != "machine" {
+		t.Fatalf("audit = %v", audit)
+	}
+	env.waitNotification()
+	time.Sleep(50 * time.Millisecond)
+	if env.notificationCount() != 1 {
+		t.Fatalf("notifications = %d, want the first use only", env.notificationCount())
+	}
+	// The audit list shows the basis.
+	list := env.do("/api/credentials/grants", credentialRequest{cookie: credentialStr(env.cookie("u-carol", 0))})
+	if !strings.Contains(list.Body.String(), `"outcome":"granted","basis":"machine"`) {
+		t.Fatalf("grants = %s", list.Body.String())
+	}
+}
+
+func TestCredentialGrantMachineConsentVoidedByNewOwnerOrOtherPlatform(t *testing.T) {
+	env := newGrantTestEnv(t)
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	env.authorize("u-carol", testDevicePlatform, nil)
+	// Given while the machine had another owner.
+	env.allowMachine("u-carol", "u-previous", "lark-cli", "device-cli")
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	assertCredentialResponse(t, env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, `{"error":"not_teammate"}`)
+	// Given to this owner, but for lark-cli only.
+	env.allowMachine("u-carol", "u-alice", "lark-cli")
+	if r := env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""); r.Code != http.StatusOK {
+		t.Fatalf("lark-cli grant = %d %s", r.Code, r.Body.String())
+	}
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "device-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	if env.mintCalls != 1 {
+		t.Fatalf("mints = %d", env.mintCalls)
+	}
+}
+
+func TestCredentialGrantTeammateWithNarrowedConsentFallsBackToMachineConsent(t *testing.T) {
+	env := newGrantTestEnv(t)
+	other := store.ConsentToTeams([]string{"t-other"})
+	env.authorize("u-bob", store.CredentialPlatformLarkCLI, &other)
+	assertCredentialResponse(t, env.grant(grantBody("u-bob", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	env.allowMachine("u-bob", "u-alice", "lark-cli")
+	if r := env.grant(grantBody("u-bob", "lark-cli"), env.token(), ""); r.Code != http.StatusOK {
+		t.Fatalf("grant = %d %s", r.Code, r.Body.String())
+	}
+	if audit := env.grants("u-bob"); audit[len(audit)-1]["basis"] != "machine" {
+		t.Fatalf("audit = %v", audit)
+	}
+	// With team consent the team is the basis even when the machine is allowed.
+	if err := env.apex.CredentialStore.SetConsent(context.Background(), "u-bob", store.CredentialPlatformLarkCLI, store.ConsentToTeams([]string{"g1"})); err != nil {
+		t.Fatal(err)
+	}
+	env.grant(grantBody("u-bob", "lark-cli"), env.token(), "")
+	if audit := env.grants("u-bob"); audit[len(audit)-1]["basis"] != "team" {
+		t.Fatalf("audit = %v", audit)
+	}
+}
+
+func TestCredentialGrantConsentAllCountsAsTeamConsentOnlyWithASharedTeam(t *testing.T) {
+	env := newGrantTestEnv(t)
+	all := store.ConsentAll()
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, &all)
+	// carol shares no team with the owner: "all" teams is not consent to anything here.
+	assertCredentialResponse(t, env.grant(consentGrantBody("u-carol", "lark-cli"), env.token(), ""), http.StatusForbidden, consentMissingBody)
+	env.allowMachine("u-carol", "u-alice", "lark-cli")
+	if r := env.grant(grantBody("u-carol", "lark-cli"), env.token(), ""); r.Code != http.StatusOK {
+		t.Fatalf("grant = %d %s", r.Code, r.Body.String())
+	}
+	if audit := env.grants("u-carol"); audit[len(audit)-1]["basis"] != "machine" {
+		t.Fatalf("audit = %v", audit)
+	}
+	// Self use records its own basis.
+	env.authorize("u-alice", store.CredentialPlatformLarkCLI, nil)
+	env.grant(grantBody("u-alice", "lark-cli"), env.token(), "")
+	if audit := env.grants("u-alice"); audit[0]["basis"] != "self" {
+		t.Fatalf("audit = %v", audit)
+	}
+}
+
+// failingCollectionProvider fails every read of one collection.
+type failingCollectionProvider struct {
+	store.DatabaseProvider
+	collection string
+}
+
+func (p failingCollectionProvider) Database(ctx context.Context) (store.DocumentDatabase, error) {
+	db, err := p.DatabaseProvider.Database(ctx)
+	return failingCollectionDatabase{DocumentDatabase: db, collection: p.collection}, err
+}
+
+type failingCollectionDatabase struct {
+	store.DocumentDatabase
+	collection string
+}
+
+func (d failingCollectionDatabase) Collection(name string) store.DocumentCollection {
+	if name == d.collection {
+		return failingCollection{}
+	}
+	return d.DocumentDatabase.Collection(name)
+}
+
+type failingCollection struct{ store.DocumentCollection }
+
+func (failingCollection) FindOne(context.Context, store.Document, any) error {
+	return errors.New("collection unreadable")
+}
+
+func TestCredentialGrantConsentStoreReadFailureIsNotARefusal(t *testing.T) {
+	env := newGrantTestEnv(t)
+	env.authorize("u-carol", store.CredentialPlatformLarkCLI, nil)
+	env.apex.CredentialStore = store.NewCredentialStore(failingCollectionProvider{DatabaseProvider: env.vault, collection: "credential_machine_consents"})
+	for _, body := range []string{grantBody("u-carol", "lark-cli"), consentGrantBody("u-carol", "lark-cli")} {
+		assertCredentialResponse(t, env.grant(body, env.token(), ""), http.StatusServiceUnavailable, `{"error":"store_unavailable"}`)
+	}
+	// A teammate whose team consent fails needs the machine consent too.
+	other := store.ConsentToTeams([]string{"t-other"})
+	env.authorize("u-bob", store.CredentialPlatformLarkCLI, &other)
+	assertCredentialResponse(t, env.grant(grantBody("u-bob", "lark-cli"), env.token(), ""), http.StatusServiceUnavailable, `{"error":"store_unavailable"}`)
+	if env.mintCalls != 0 || len(env.grants("u-carol")) != 0 {
+		t.Fatal("an unreadable consent must neither mint nor be audited as a refusal")
+	}
+}
+
+func TestRegionalGrantUnderMachineConsent(t *testing.T) {
+	env := newRegionalGrantEnv(t)
+	env.authorizeRegions("u-carol", "r1")
+	env.allowMachine("u-carol", "u-alice", regionalTestPrimary)
+	body := strings.TrimSuffix(grantBody("u-carol", regionalTestPrimary), "}") + `,"cloudJwtRegions":["r1"]}`
+	r := env.grant(body, env.token(), "")
+	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `"DEVICE_CLI_TOKEN_R1"`) || !strings.Contains(r.Body.String(), `"cloudJwtRegions":["r1"]`) {
+		t.Fatalf("grant = %d %s", r.Code, r.Body.String())
+	}
+	if audit := env.grants("u-carol"); len(audit) != 1 || audit[0]["basis"] != "machine" {
+		t.Fatalf("audit = %v", audit)
 	}
 }
 

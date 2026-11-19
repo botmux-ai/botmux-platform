@@ -35,6 +35,9 @@ import (
 //	PUT    /api/credentials/:platform/consent     routine → {teams: 'all' | [teamId]}
 //	DELETE /api/credentials/:platform             strict → revoke
 //	GET    /api/credentials/grants?limit=         recent issuance audit
+//	GET    /api/credentials/requests/:id          routine → an authorization request addressed to me, with what is still missing
+//	POST   /api/credentials/requests/:id/allow    strict + Origin → allow the request's machine for the services it names
+//	DELETE /api/credentials/machines/:machineId   strict + Origin → take back that allowance
 //
 // Authorize/revoke grant or drop a standing permission and use the strict
 // (10 minute) window; consent edits and polling use routine. Every write
@@ -58,16 +61,28 @@ type CredentialsDeps struct {
 	Notify func(ctx context.Context, unionID string, info feishu.CredentialFirstUseMessage) error
 	// GrantLimiter rate-limits grants per machine; nil uses the process-wide one.
 	GrantLimiter *CredentialGrantLimiter
+	// NotifyRequest sends the authorization-request card.
+	NotifyRequest func(ctx context.Context, unionID string, info feishu.CredentialRequestMessage) error
+	// RequestLimiter rate-limits authorization requests per machine; nil uses
+	// the process-wide one.
+	RequestLimiter *CredentialGrantLimiter
+	// RegionalWait overrides regionalWaitBudget (tests); 0 keeps it.
+	RegionalWait time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
 
 const credentialsPagePath = "/credentials"
 
+// openCredentialRequestsMax bounds the open requests the credentials list shows.
+const openCredentialRequestsMax = 5
+
 var (
 	credentialPlatformRoute = regexp.MustCompile(`^/api/credentials/([a-z-]+)(?:/([a-z]+))?$`)
 	credentialPendingID     = regexp.MustCompile(`^cp_[a-f0-9]{24}$`)
 	credentialConsentTeamID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	credentialRequestRoute  = regexp.MustCompile(`^/api/credentials/requests/(cr_[a-f0-9]{24})(?:/(allow))?$`)
+	credentialMachineRoute  = regexp.MustCompile(`^/api/credentials/machines/([A-Za-z0-9._:-]{1,200})$`)
 )
 
 func (a *Apex) credentialNow() time.Time {
@@ -215,6 +230,14 @@ func (a *Apex) handleCredentialsAPI(w http.ResponseWriter, r *http.Request) bool
 		a.listCredentialGrants(ctx, w, r)
 		return true
 	}
+	if match := credentialRequestRoute.FindStringSubmatch(path); match != nil {
+		a.serveCredentialRequest(ctx, w, r, match[1], match[2])
+		return true
+	}
+	if match := credentialMachineRoute.FindStringSubmatch(path); match != nil {
+		a.serveCredentialMachine(ctx, w, r, match[1])
+		return true
+	}
 
 	match := credentialPlatformRoute.FindStringSubmatch(path)
 	if match == nil || !a.Credentials.Providers.Known(match[1]) {
@@ -249,7 +272,7 @@ func (a *Apex) handleCredentialsAPI(w http.ResponseWriter, r *http.Request) bool
 		if platform == store.CredentialPlatformLarkCLI {
 			a.authorizeLarkCredential(ctx, w, r, session)
 		} else {
-			a.authorizeDeviceCredential(ctx, w, session, a.Credentials.Providers.DeviceLogin(string(platform)))
+			a.authorizeDeviceCredential(ctx, w, r, session, a.Credentials.Providers.DeviceLogin(string(platform)))
 		}
 	case platform != store.CredentialPlatformLarkCLI && action == "complete" && r.Method == http.MethodPost:
 		session := auth.RequireRoutineSSO(principal, now)
@@ -271,12 +294,59 @@ func (a *Apex) handleCredentialsAPI(w http.ResponseWriter, r *http.Request) bool
 			writeCredentialStaleSession(w)
 			return true
 		}
+		if r.URL.Query().Has("region") {
+			// One region is revoked on its own route (see below); here it would
+			// read as revoking the whole platform.
+			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+			return true
+		}
+		// Revoking a platform revokes its regional logins with it: they were
+		// authorized under it and are reachable only through it. They go
+		// first, and a regional login still being authorized with them, so a
+		// revocation that stops halfway leaves the platform in place rather
+		// than regional logins without it.
+		removed, ok := a.revokeRegionalCredentials(ctx, session.UnionID, string(platform))
+		if !ok {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return true
+		}
+		if err := a.CredentialStore.DropMachineConsentsFor(ctx, session.UnionID, platform); err != nil {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return true
+		}
 		err := a.CredentialStore.Delete(ctx, session.UnionID, platform)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
 			return true
 		}
 		slog.Info("credential revoked", "unionId", session.UnionID, "platform", string(platform))
+		writeJSONNoStore(w, http.StatusOK, credentialRemovedBody{OK: true, Removed: removed || err == nil})
+	case action == "region" && r.Method == http.MethodPost:
+		// Regional logins have a route of their own, which a pod from before
+		// them refuses (405) instead of reading as an action on the platform.
+		session := auth.RequireFreshSSO(principal, now)
+		if session == nil {
+			writeCredentialStaleSession(w)
+			return true
+		}
+		a.authorizeRegionalCredential(ctx, w, r, session, a.Credentials.Providers.DeviceLogin(string(platform)))
+	case action == "region" && r.Method == http.MethodDelete:
+		session := auth.RequireFreshSSO(principal, now)
+		if session == nil {
+			writeCredentialStaleSession(w)
+			return true
+		}
+		login, known := a.regionalLogin(string(platform), r.URL.Query().Get("region"))
+		if !known {
+			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+			return true
+		}
+		err := a.CredentialStore.Delete(ctx, session.UnionID, store.CredentialPlatform(login.Platform))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return true
+		}
+		slog.Info("credential revoked", "unionId", session.UnionID, "platform", login.Platform)
 		writeJSONNoStore(w, http.StatusOK, credentialRemovedBody{OK: true, Removed: err == nil})
 	default:
 		writeJSONNoStore(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
@@ -297,7 +367,11 @@ type credentialsListBody struct {
 	Platforms   []credentialPlatformBody `json:"platforms"`
 	Teams       []credentialTeamBody     `json:"teams"`
 	Credentials []credentialBody         `json:"credentials"`
-	Pending     *credentialPendingBody   `json:"pending,omitempty"`
+	// Machines are the machines the person allowed; Requests the open
+	// authorization requests addressed to them.
+	Machines []credentialMachineBody `json:"machines"`
+	Requests []credentialRequestView `json:"requests"`
+	Pending  *credentialPendingBody  `json:"pending,omitempty"`
 }
 
 // credentialPlatformBody is one page card: flow "oauth" redirects (lark-cli),
@@ -309,6 +383,9 @@ type credentialPlatformBody struct {
 	Title       string                     `json:"title"`
 	Description string                     `json:"description"`
 	Linked      []credential.LinkedService `json:"linked,omitempty"`
+	// Regions are logins authorized one by one under this card (each its own
+	// record, credential.RegionalLogin).
+	Regions []credential.RegionalLogin `json:"regions,omitempty"`
 }
 
 type credentialTeamBody struct {
@@ -354,6 +431,7 @@ func (a *Apex) credentialPlatforms() []credentialPlatformBody {
 		out = append(out, credentialPlatformBody{
 			Platform: d.Platform, Flow: "device", Available: provider.Available(),
 			Title: d.Title, Description: d.Description, Linked: d.Linked,
+			Regions: a.Credentials.Providers.Regions(d.Platform),
 		})
 	}
 	return out
@@ -376,8 +454,10 @@ func (a *Apex) listCredentials(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	vaultEnabled := a.credentialVaultEnabled()
 	var creds []store.CredentialDoc
-	var credsErr, pendingErr error
+	var credsErr, pendingErr, machinesErr, requestsErr error
 	var pending *store.CredentialPendingDoc
+	machines := []credentialMachineBody{}
+	var requests []store.CredentialRequestDoc
 	if vaultEnabled {
 		creds, credsErr = a.CredentialStore.ListForUser(ctx, session.UnionID)
 		doc, err := a.CredentialStore.GetPendingForUser(ctx, session.UnionID)
@@ -387,8 +467,10 @@ func (a *Apex) listCredentials(ctx context.Context, w http.ResponseWriter, r *ht
 		case !errors.Is(err, store.ErrNotFound):
 			pendingErr = err
 		}
+		machines, machinesErr = a.credentialMachines(ctx, session.UnionID)
+		requests, requestsErr = a.CredentialStore.ListOpenRequests(ctx, session.UnionID, openCredentialRequestsMax)
 	}
-	if teamsErr != nil || credsErr != nil || pendingErr != nil {
+	if teamsErr != nil || credsErr != nil || pendingErr != nil || machinesErr != nil || requestsErr != nil {
 		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
 		return
 	}
@@ -399,6 +481,11 @@ func (a *Apex) listCredentials(ctx context.Context, w http.ResponseWriter, r *ht
 		Platforms:    platforms,
 		Teams:        make([]credentialTeamBody, 0, len(teams)),
 		Credentials:  make([]credentialBody, 0, len(creds)),
+		Machines:     machines,
+		Requests:     make([]credentialRequestView, 0, len(requests)),
+	}
+	for _, request := range requests {
+		body.Requests = append(body.Requests, credentialRequestViewOf(request))
 	}
 	for _, p := range platforms {
 		body.Providers[p.Platform] = p.Available
@@ -433,6 +520,7 @@ type credentialGrantBody struct {
 	AppID        string                       `json:"appId"`
 	Outcome      store.CredentialGrantOutcome `json:"outcome"`
 	Reason       string                       `json:"reason,omitempty"`
+	Basis        string                       `json:"basis,omitempty"`
 }
 
 func (a *Apex) listCredentialGrants(ctx context.Context, w http.ResponseWriter, r *http.Request) {
@@ -458,10 +546,210 @@ func (a *Apex) listCredentialGrants(ctx context.Context, w http.ResponseWriter, 
 		}
 		body.Grants = append(body.Grants, credentialGrantBody{
 			At: g.At, Platform: g.Platform, MachineID: g.MachineID, MachineName: name,
-			OwnerUnionID: g.OwnerUnionID, AppID: g.AppID, Outcome: g.Outcome, Reason: g.Reason,
+			OwnerUnionID: g.OwnerUnionID, AppID: g.AppID, Outcome: g.Outcome, Reason: g.Reason, Basis: g.Basis,
 		})
 	}
 	writeJSONNoStore(w, http.StatusOK, body)
+}
+
+// credentialRequestSession authenticates the request and machine routes: the
+// vault must be enabled and the caller an SSO session. A write (strict) also
+// needs the exact Origin and a fresh login; a read a routine session. On failure
+// the response has been written.
+func (a *Apex) credentialRequestSession(w http.ResponseWriter, r *http.Request, strict bool) (*auth.SessionPayload, bool) {
+	if !a.credentialVaultEnabled() {
+		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "credential_vault_disabled"})
+		return nil, false
+	}
+	if strict && !a.credentialsOriginOK(r) {
+		writeJSONNoStore(w, http.StatusForbidden, map[string]any{"error": "bad_origin"})
+		return nil, false
+	}
+	principal, sent := a.credentialPrincipal(w, r)
+	if sent {
+		return nil, false
+	}
+	if principal != nil && principal.Kind != auth.PrincipalSSO {
+		writeJSONNoStore(w, http.StatusForbidden, map[string]any{"error": "sso_required"})
+		return nil, false
+	}
+	session := auth.RequireRoutineSSO(principal, a.credentialNow())
+	if strict {
+		session = auth.RequireFreshSSO(principal, a.credentialNow())
+	}
+	if session == nil {
+		writeCredentialStaleSession(w)
+		return nil, false
+	}
+	return session, true
+}
+
+type credentialRequestView struct {
+	ID          string   `json:"id"`
+	OwnerName   string   `json:"ownerName"`
+	MachineName string   `json:"machineName"`
+	BotName     string   `json:"botName"`
+	Platforms   []string `json:"platforms"`
+	Scopes      []string `json:"scopes"`
+	CreatedAt   int64    `json:"createdAt"`
+	ExpiresAt   int64    `json:"expiresAt"`
+}
+
+func credentialRequestViewOf(doc store.CredentialRequestDoc) credentialRequestView {
+	return credentialRequestView{
+		ID: doc.ID, OwnerName: doc.OwnerName, MachineName: doc.MachineName, BotName: doc.BotName,
+		Platforms: doc.Platforms, Scopes: doc.Scopes, CreatedAt: doc.CreatedAt, ExpiresAt: doc.ExpiresAt,
+	}
+}
+
+type credentialRequestItem struct {
+	Platform string `json:"platform"`
+	Title    string `json:"title"`
+	State    string `json:"state"`
+}
+
+type credentialRequestDetailBody struct {
+	Request        credentialRequestView   `json:"request"`
+	Items          []credentialRequestItem `json:"items"`
+	MachineChanged bool                    `json:"machineChanged"`
+}
+
+type credentialMachineAllowedBody struct {
+	MachineID string   `json:"machineId"`
+	Platforms []string `json:"platforms"`
+}
+
+type credentialRequestAllowedBody struct {
+	OK      bool                         `json:"ok"`
+	Machine credentialMachineAllowedBody `json:"machine"`
+}
+
+// serveCredentialRequest serves /api/credentials/requests/{id}: GET the
+// request with what is still missing, POST …/allow to allow its machine for
+// the services it names.
+func (a *Apex) serveCredentialRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, id, action string) {
+	isGet := action == "" && r.Method == http.MethodGet
+	if !isGet && !(action == "allow" && r.Method == http.MethodPost) {
+		writeJSONNoStore(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+		return
+	}
+	session, ok := a.credentialRequestSession(w, r, !isGet)
+	if !ok {
+		return
+	}
+	request, err := a.CredentialStore.GetRequest(ctx, session.UnionID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSONNoStore(w, http.StatusNotFound, map[string]any{"error": "request_not_found"})
+		return
+	}
+	if err != nil {
+		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+		return
+	}
+	_, ownership := a.checkDeviceMachineOwnership(ctx, request.MachineID, request.OwnerUnionID)
+	if ownership == deviceMachineUnavailable {
+		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+		return
+	}
+	changed := ownership != deviceMachineOwned
+	if isGet {
+		a.writeCredentialRequestDetail(ctx, w, request, changed)
+		return
+	}
+	if changed {
+		writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": "machine_ownership_changed"})
+		return
+	}
+	allowed := []string{}
+	if session.UnionID != request.OwnerUnionID {
+		consent, err := a.CredentialStore.AllowMachine(ctx, session.UnionID, request.MachineID, request.OwnerUnionID, request.Platforms)
+		if err != nil {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return
+		}
+		allowed = consent.Platforms
+		slog.Info("credential machine allowed", "unionId", session.UnionID, "machineId", request.MachineID, "ownerUnionId", request.OwnerUnionID, "platforms", request.Platforms)
+	}
+	writeJSONNoStore(w, http.StatusOK, credentialRequestAllowedBody{OK: true, Machine: credentialMachineAllowedBody{MachineID: request.MachineID, Platforms: allowed}})
+}
+
+func (a *Apex) writeCredentialRequestDetail(ctx context.Context, w http.ResponseWriter, request store.CredentialRequestDoc, changed bool) {
+	titles := map[string]string{}
+	for _, card := range a.credentialPlatforms() {
+		titles[card.Platform] = card.Title
+	}
+	owner := &MachineAuth{UnionID: request.OwnerUnionID, MachineID: request.MachineID}
+	items := make([]credentialRequestItem, 0, len(request.Platforms))
+	for _, platform := range request.Platforms {
+		state, err := a.credentialRequestState(ctx, owner, request.UnionID, store.CredentialPlatform(platform), request.Scopes)
+		if err != nil {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return
+		}
+		if state == "" {
+			state = "ready"
+		}
+		items = append(items, credentialRequestItem{Platform: platform, Title: first(titles[platform], platform), State: state})
+	}
+	writeJSONNoStore(w, http.StatusOK, credentialRequestDetailBody{Request: credentialRequestViewOf(request), Items: items, MachineChanged: changed})
+}
+
+// serveCredentialMachine serves DELETE /api/credentials/machines/{machineId}:
+// take back the person's allowance of that machine.
+func (a *Apex) serveCredentialMachine(ctx context.Context, w http.ResponseWriter, r *http.Request, machineID string) {
+	if r.Method != http.MethodDelete {
+		writeJSONNoStore(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+		return
+	}
+	session, ok := a.credentialRequestSession(w, r, true)
+	if !ok {
+		return
+	}
+	removed, err := a.CredentialStore.RevokeMachineConsent(ctx, session.UnionID, machineID)
+	if err != nil {
+		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+		return
+	}
+	slog.Info("credential machine allowance revoked", "unionId", session.UnionID, "machineId", machineID)
+	writeJSONNoStore(w, http.StatusOK, credentialRemovedBody{OK: true, Removed: removed})
+}
+
+// credentialMachineBody is one machine the person allowed. Current is false
+// once the machine belongs to someone else (or is gone): the allowance no
+// longer applies.
+type credentialMachineBody struct {
+	MachineID   string   `json:"machineId"`
+	MachineName string   `json:"machineName"`
+	OwnerName   string   `json:"ownerName,omitempty"`
+	Platforms   []string `json:"platforms"`
+	Current     bool     `json:"current"`
+	UpdatedAt   int64    `json:"updatedAt"`
+}
+
+// credentialMachines lists the machines the person allowed.
+func (a *Apex) credentialMachines(ctx context.Context, unionID string) ([]credentialMachineBody, error) {
+	consents, err := a.CredentialStore.ListMachineConsents(ctx, unionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]credentialMachineBody, 0, len(consents))
+	for _, consent := range consents {
+		item := credentialMachineBody{
+			MachineID: consent.MachineID, Platforms: consent.Platforms, UpdatedAt: consent.UpdatedAt,
+		}
+		machine, ownership := a.checkDeviceMachineOwnership(ctx, consent.MachineID, consent.OwnerUnionID)
+		if ownership == deviceMachineUnavailable {
+			return nil, store.ErrUnavailable
+		}
+		if ownership != deviceMachineGone {
+			item.MachineName = machineDisplayName(machine)
+		}
+		if ownership == deviceMachineOwned {
+			item.Current, item.OwnerName = true, machine.OwnerName
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 // credentialGrantLimit is Math.max(1, Math.min(200, Number(limit || 50) || 50)).
@@ -609,7 +897,7 @@ func credentialContains(values []string, want string) bool {
 }
 
 // maxIncrementalScopes bounds an incremental request; botmux sends at most 100.
-const maxIncrementalScopes = 100
+const maxIncrementalScopes = store.MaxRequestScopes
 
 // larkScopeSyntax is a Feishu scope name (same rule as botmux's catalog check).
 var larkScopeSyntax = regexp.MustCompile(`^[a-z0-9_]+(:[a-z0-9_.-]+)+$|^offline_access$`)
@@ -618,7 +906,11 @@ var larkScopeSyntax = regexp.MustCompile(`^[a-z0-9_]+(:[a-z0-9_.-]+)+$|^offline_
 // POST /api/credentials/lark-cli/authorize. No body or no "scopes" member is
 // the default (full) authorization; ok=false means the member is malformed.
 func readIncrementalScopes(r *http.Request) (scopes []string, ok bool) {
-	body := readCredentialJSONFields(r)
+	return incrementalScopesOf(readCredentialJSONFields(r))
+}
+
+// incrementalScopesOf is readIncrementalScopes on an already parsed body.
+func incrementalScopesOf(body map[string]json.RawMessage) (scopes []string, ok bool) {
 	raw, present := body["scopes"]
 	if body == nil || !present || string(bytes.TrimSpace(raw)) == "null" {
 		return nil, true
@@ -689,7 +981,101 @@ type deviceAuthorizeBody struct {
 	AuthURL   string `json:"authUrl"`
 }
 
-func (a *Apex) authorizeDeviceCredential(ctx context.Context, w http.ResponseWriter, session *auth.SessionPayload, provider credential.DeviceLogin) {
+// credentialRevokeTarget is the record a DELETE removes: the platform, or with
+// ?region= one of its regional logins.
+// revokeRegionalCredentials removes every regional login of platform the
+// person holds, and a regional login of it still being authorized.
+// ok=false on a store failure (the rest may remain).
+func (a *Apex) revokeRegionalCredentials(ctx context.Context, unionID, platform string) (removed, ok bool) {
+	regions := a.Credentials.Providers.Regions(platform)
+	if len(regions) == 0 {
+		return false, true
+	}
+	if pending, err := a.CredentialStore.GetPendingForUser(ctx, unionID); err == nil {
+		if _, primary, regional := a.Credentials.Providers.RegionalLoginOf(string(pending.Platform)); regional && primary == platform {
+			a.CredentialStore.DeletePending(ctx, pending.ID)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, false
+	}
+	for _, login := range regions {
+		err := a.CredentialStore.Delete(ctx, unionID, store.CredentialPlatform(login.Platform))
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return removed, false
+		}
+		removed = removed || err == nil
+	}
+	return removed, true
+}
+
+func (a *Apex) regionalLogin(platform, region string) (credential.RegionalLogin, bool) {
+	for _, login := range a.Credentials.Providers.Regions(platform) {
+		if login.Region == region {
+			return login, true
+		}
+	}
+	return credential.RegionalLogin{}, false
+}
+
+// authorizeDeviceCredential starts a device login of the platform itself.
+func (a *Apex) authorizeDeviceCredential(ctx context.Context, w http.ResponseWriter, r *http.Request, session *auth.SessionPayload, provider credential.DeviceLogin) {
+	if _, present := readCredentialJSONFields(r)["region"]; present {
+		// A regional login starts on its own route (POST …/region).
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+		return
+	}
+	a.beginDeviceCredential(ctx, w, session, provider, "")
+}
+
+// authorizeRegionalCredential starts one of the platform's regional logins
+// (body {"region": …}). It needs the platform's own authorization first:
+// machines reach a region only through it.
+func (a *Apex) authorizeRegionalCredential(ctx context.Context, w http.ResponseWriter, r *http.Request, session *auth.SessionPayload, provider credential.DeviceLogin) {
+	// The route serves every known platform: lark-cli has no device-login
+	// provider (nil here) and most device logins have no regions. Both are
+	// refused before the provider is asked anything.
+	if _, implements := provider.(credential.RegionalDeviceLogin); !implements {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+		return
+	}
+	platform := provider.Descriptor().Platform
+	region, isString := credentialFieldString(readCredentialJSONFields(r), "region")
+	if _, known := a.regionalLogin(platform, region); !isString || !known {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+		return
+	}
+	if _, err := a.CredentialStore.Get(ctx, session.UnionID, store.CredentialPlatform(platform)); errors.Is(err, store.ErrNotFound) {
+		writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": "primary_required"})
+		return
+	} else if err != nil && !errors.Is(err, store.ErrInvalid) {
+		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+		return
+	}
+	a.beginDeviceCredential(ctx, w, session, provider, region)
+}
+
+// beginDeviceCredential starts the platform's device login, or with region
+// set that region's, and stores it as the person's pending login.
+func (a *Apex) beginDeviceCredential(ctx context.Context, w http.ResponseWriter, session *auth.SessionPayload, provider credential.DeviceLogin, region string) {
+	if provider == nil {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+		return
+	}
+	platform := provider.Descriptor().Platform
+	begin := provider.Begin
+	if region != "" {
+		// A region the provider does not log in at is refused: starting the
+		// platform's own login in its place would store it as the pending
+		// login of the platform.
+		login, known := a.regionalLogin(platform, region)
+		regional, implements := provider.(credential.RegionalDeviceLogin)
+		if !known || !implements {
+			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
+			return
+		}
+		platform = login.Platform
+		begin = func(ctx context.Context) credential.DeviceLoginBegin { return regional.BeginRegion(ctx, region) }
+	}
 	if !provider.Available() {
 		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "provider_unavailable"})
 		return
@@ -699,8 +1085,7 @@ func (a *Apex) authorizeDeviceCredential(ctx context.Context, w http.ResponseWri
 		writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
 		return
 	}
-	platform := provider.Descriptor().Platform
-	begun := provider.Begin(ctx)
+	begun := begin(ctx)
 	if !begun.OK {
 		writeJSONNoStore(w, http.StatusBadGateway, credentialErrorBody{Error: "provider_unavailable", Detail: begun.Detail})
 		return
@@ -727,13 +1112,20 @@ type deviceCompleteBody struct {
 func (a *Apex) completeDeviceCredential(ctx context.Context, w http.ResponseWriter, r *http.Request, session *auth.SessionPayload, provider credential.DeviceLogin) {
 	body := readCredentialJSONFields(r)
 	pendingID, isString := credentialFieldString(body, "pendingId")
-	if body == nil || !isString || !credentialPendingID.MatchString(pendingID) {
+	if provider == nil || body == nil || !isString || !credentialPendingID.MatchString(pendingID) {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid"})
 		return
 	}
 	descriptor := provider.Descriptor()
 	platform := descriptor.Platform
 	pending, err := a.CredentialStore.GetPending(ctx, session.UnionID, pendingID)
+	if err == nil {
+		// A regional login completes under its primary platform's route and
+		// is stored as its own record.
+		if login, primary, regional := a.Credentials.Providers.RegionalLoginOf(string(pending.Platform)); regional && primary == platform {
+			platform = login.Platform
+		}
+	}
 	if errors.Is(err, store.ErrNotFound) || (err == nil && string(pending.Platform) != platform) {
 		writeJSONNoStore(w, http.StatusNotFound, map[string]any{"error": "pending_not_found"})
 		return
@@ -755,6 +1147,33 @@ func (a *Apex) completeDeviceCredential(ctx context.Context, w http.ResponseWrit
 		return
 	}
 	done := provider.Complete(ctx, plain)
+	if done.State == credential.DeviceLoginAuthorized && platform != descriptor.Platform {
+		// A regional login is stored only under a live authorization of its
+		// platform: revoked meanwhile, it must not come back with the next one.
+		if _, err := a.CredentialStore.Get(ctx, session.UnionID, store.CredentialPlatform(descriptor.Platform)); errors.Is(err, store.ErrNotFound) {
+			a.CredentialStore.DeletePending(ctx, pending.ID)
+			writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": "primary_required"})
+			return
+		} else if err != nil && !errors.Is(err, store.ErrInvalid) {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return
+		}
+	}
+	if done.State == credential.DeviceLoginAuthorized && platform == descriptor.Platform {
+		// A new authorization of the platform (not a re-authorization) starts
+		// without regional logins: one left from before a revocation (a pod
+		// from before regional logins revokes only the platform, or the
+		// revocation raced a regional login completing) must not come back.
+		if _, err := a.CredentialStore.Get(ctx, session.UnionID, store.CredentialPlatform(platform)); errors.Is(err, store.ErrNotFound) {
+			if _, ok := a.revokeRegionalCredentials(ctx, session.UnionID, platform); !ok {
+				writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+				return
+			}
+		} else if err != nil && !errors.Is(err, store.ErrInvalid) {
+			writeJSONNoStore(w, http.StatusServiceUnavailable, map[string]any{"error": "store_unavailable"})
+			return
+		}
+	}
 	if done.State == credential.DeviceLoginAuthorized {
 		sealed, err := credential.SealPayload(keys, session.UnionID, platform, done.Payload)
 		if err != nil {
@@ -1001,12 +1420,15 @@ func credentialFormEncode(value string) string {
 	return b.String()
 }
 
-// CredentialGrantLimiter caps credential grants per machine (120 per minute).
-// It only guards against a runaway or leaked machine token; the real
-// boundary is team membership plus the person's consent.
+// CredentialGrantLimiter caps requests per machine within a window: 120 grants
+// per minute, or (NewCredentialRequestLimiter) 30 authorization requests per
+// ten minutes. It only guards against a runaway or leaked machine token; the
+// real boundary is team membership plus the person's consent.
 type CredentialGrantLimiter struct {
-	mu      sync.Mutex
-	windows map[string]*credentialGrantWindow
+	mu       sync.Mutex
+	windows  map[string]*credentialGrantWindow
+	windowMS int64
+	max      int
 }
 
 type credentialGrantWindow struct {
@@ -1017,25 +1439,35 @@ type credentialGrantWindow struct {
 const (
 	credentialGrantWindowMS = 60_000
 	credentialGrantMax      = 120
+
+	credentialRequestWindowMS = 10 * 60_000
+	credentialRequestMax      = 30
 )
 
 func NewCredentialGrantLimiter() *CredentialGrantLimiter {
-	return &CredentialGrantLimiter{windows: map[string]*credentialGrantWindow{}}
+	return &CredentialGrantLimiter{windows: map[string]*credentialGrantWindow{}, windowMS: credentialGrantWindowMS, max: credentialGrantMax}
 }
 
-var defaultCredentialGrantLimiter = NewCredentialGrantLimiter()
+func NewCredentialRequestLimiter() *CredentialGrantLimiter {
+	return &CredentialGrantLimiter{windows: map[string]*credentialGrantWindow{}, windowMS: credentialRequestWindowMS, max: credentialRequestMax}
+}
 
-// take counts one grant; limited=true carries the ms until the window resets.
+var (
+	defaultCredentialGrantLimiter   = NewCredentialGrantLimiter()
+	defaultCredentialRequestLimiter = NewCredentialRequestLimiter()
+)
+
+// take counts one request; limited=true carries the ms until the window resets.
 func (l *CredentialGrantLimiter) take(machineID string, nowMS int64) (retryAfterMS int64, limited bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	window := l.windows[machineID]
-	if window == nil || nowMS-window.since >= credentialGrantWindowMS {
+	if window == nil || nowMS-window.since >= l.windowMS {
 		l.windows[machineID] = &credentialGrantWindow{since: nowMS, count: 1}
 		return 0, false
 	}
-	if window.count >= credentialGrantMax {
-		return window.since + credentialGrantWindowMS - nowMS, true
+	if window.count >= l.max {
+		return window.since + l.windowMS - nowMS, true
 	}
 	window.count++
 	return 0, false
