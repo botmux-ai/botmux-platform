@@ -123,6 +123,7 @@ var freshSSOStrictRoutes = []struct{ name, method, path string }{
 	{"team admins", http.MethodPut, "/api/teams/feedfacefeedface/admins"},
 	{"team invite", http.MethodPost, "/api/teams/feedfacefeedface/invite"},
 	{"team invite-user", http.MethodPost, "/api/teams/feedfacefeedface/invite-user"},
+	{"external bot register", http.MethodPost, "/api/teams/feedfacefeedface/external-bots"},
 	{"co-managers put", http.MethodPut, "/api/machines/feedfacefeedface/co-managers"},
 	{"co-manager delete", http.MethodDelete, "/api/machines/feedfacefeedface/co-managers/u-bob"},
 }
@@ -134,6 +135,7 @@ var freshSSORoutineRoutes = []struct{ name, method, path string }{
 	{"hall join", http.MethodPost, "/api/teams/feedfacefeedface/hall/join"},
 	{"accept invite", http.MethodPost, "/api/teams/accept"},
 	{"team bots", http.MethodPost, "/api/teams/feedfacefeedface/bots"},
+	{"external bot remove", http.MethodDelete, "/api/teams/feedfacefeedface/external-bots/cli_0123456789abcdef"},
 	{"create group", http.MethodPost, "/api/groups/create"},
 }
 

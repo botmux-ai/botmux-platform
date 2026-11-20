@@ -404,6 +404,19 @@ async function main() {
     const rosterB = JSON.parse((await req({ path: `/api/teams/${created.teamId}/roster`, headers: C })).body);
     ok(rosterB.members[0].machines[0].bots[0].inTeam === false, '移除后 inTeam=false');
 
+    // K3 外部机器人（不跑在 botmux 上）：成员登记 → 名册可见 → 坏 appId 被拒 → 移除
+    const extBot = { appId: 'cli_smokeexternal0001', name: '外部冒烟机器人', unionId: 'on_smokeexternal0001' };
+    const extAdd = await req({ path: `/api/teams/${created.teamId}/external-bots`, method: 'POST', ...jpost(extBot) });
+    ok(extAdd.status === 200, '登记外部机器人');
+    const rosterE = JSON.parse((await req({ path: `/api/teams/${created.teamId}/roster`, headers: C })).body);
+    ok(rosterE.externalBots.length === 1 && rosterE.externalBots[0].appId === extBot.appId && rosterE.externalBots[0].registeredBy === roster.members[0].unionId, '名册含外部机器人与登记人');
+    const extBad = await req({ path: `/api/teams/${created.teamId}/external-bots`, method: 'POST', ...jpost({ appId: 'ou_not_an_app', name: 'x' }) });
+    ok(extBad.status === 400, '非 cli_ appId 被拒（400）');
+    const extRm = await req({ path: `/api/teams/${created.teamId}/external-bots/${extBot.appId}`, method: 'DELETE', headers: C });
+    ok(extRm.status === 200, '登记人移除外部机器人');
+    const rosterF = JSON.parse((await req({ path: `/api/teams/${created.teamId}/roster`, headers: C })).body);
+    ok(rosterF.externalBots.length === 0, '移除后名册无外部机器人');
+
     const inv = JSON.parse((await req({ path: `/api/teams/${created.teamId}/invite`, method: 'POST', headers: C })).body);
     ok(!!inv.invite, '生成邀请 token');
     const acc = await req({ path: '/api/teams/accept', method: 'POST', headers: { ...C, 'content-type': 'application/json' }, body: JSON.stringify({ invite: inv.invite }) });

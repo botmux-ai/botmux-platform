@@ -3,6 +3,7 @@ package storetest
 import (
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ func RunRepository(t *testing.T, newDB NewDatabase, opts ...Option) {
 	cfg := newConfig(opts)
 	t.Run("Machines", func(t *testing.T) { testMachines(t, newDB(t)) })
 	t.Run("UsersAndTeams", func(t *testing.T) { testTeams(t, newDB(t)) })
+	t.Run("TeamExternalBots", func(t *testing.T) { testTeamExternalBots(t, newDB(t)) })
 	t.Run("Devices", func(t *testing.T) { testDevices(t, newDB(t)) })
 	t.Run("DesktopSessionFences", func(t *testing.T) { testDesktopFences(t, newDB(t)) })
 	t.Run("Credentials", func(t *testing.T) { testCredentials(t, newDB(t)) })
@@ -280,6 +282,107 @@ func testTeams(t *testing.T, db store.DocumentDatabase) {
 	wantErr(t, repo.AddTeamMember(ctx, "t1", "u2"), store.ErrNotFound, "add member to deleted team")
 	_, err = repo.GetTeam(ctx, "t1")
 	wantErr(t, err, store.ErrNotFound, "get deleted team")
+}
+
+func testTeamExternalBots(t *testing.T, db store.DocumentDatabase) {
+	ctx := testContext(t)
+	repo := store.NewDocumentRepository(provider{db})
+	must(t, repo.CreateTeam(ctx, store.TeamDoc{ID: "t1", Name: "Team", Members: []string{"u1", "u2"}, CreatedBy: "u1", CreatedAt: 1}), "create t1")
+
+	alpha := store.TeamExternalBot{AppID: "cli_alpha", Name: "Alpha", RegisteredBy: "u1", RegisteredAt: 100}
+	// The registrant must be a member at write time.
+	wantErr(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_alpha", Name: "Alpha", RegisteredBy: "u9", RegisteredAt: 50}), store.ErrNotTeamMember, "non-member registers")
+	must(t, repo.PutTeamExternalBot(ctx, "t1", alpha), "add alpha")
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_beta", Name: "Beta", UnionID: "on_beta", RegisteredBy: "u2", RegisteredAt: 200}), "add beta")
+	// Another member cannot take over a registered appId.
+	wantErr(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_alpha", Name: "Mine", RegisteredBy: "u2", RegisteredAt: 300}), store.ErrConflict, "u2 re-registers alpha")
+	// The registrant updates in place: same slot, new name and union_id.
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_alpha", Name: "Alpha 2", UnionID: "on_alpha", RegisteredBy: "u1", RegisteredAt: 400}), "u1 updates alpha")
+	team, err := repo.GetTeam(ctx, "t1")
+	must(t, err, "get t1")
+	wantEqual(t, team.ExternalBots, []store.TeamExternalBot{
+		{AppID: "cli_alpha", Name: "Alpha 2", UnionID: "on_alpha", RegisteredBy: "u1", RegisteredAt: 400},
+		{AppID: "cli_beta", Name: "Beta", UnionID: "on_beta", RegisteredBy: "u2", RegisteredAt: 200},
+	}, "external bots after update")
+
+	// Removal is scoped to the registrant's entry, and to the actor's right.
+	removed, err := repo.RemoveTeamExternalBot(ctx, "t1", "cli_alpha", "u2", "u2")
+	must(t, err, "u2 removes alpha as if it were u2's")
+	if removed {
+		t.Fatal("removed another member's entry")
+	}
+	_, err = repo.RemoveTeamExternalBot(ctx, "t1", "cli_alpha", "u1", "u2")
+	wantErr(t, err, store.ErrConflict, "non-admin u2 removes u1's alpha")
+	removed, err = repo.RemoveTeamExternalBot(ctx, "t1", "cli_beta", "u2", "u2")
+	must(t, err, "u2 removes beta")
+	if !removed {
+		t.Fatal("u2's own entry was not removed")
+	}
+	team, err = repo.GetTeam(ctx, "t1")
+	must(t, err, "get t1 after remove")
+	wantEqual(t, team.ExternalBots, []store.TeamExternalBot{{AppID: "cli_alpha", Name: "Alpha 2", UnionID: "on_alpha", RegisteredBy: "u1", RegisteredAt: 400}}, "external bots after remove")
+
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_gamma", Name: "Gamma", RegisteredBy: "u1", RegisteredAt: 500}), "add gamma")
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_delta", Name: "Delta", RegisteredBy: "u2", RegisteredAt: 600}), "add delta")
+	must(t, repo.RemoveTeamExternalBotsBy(ctx, "t1", "u1"), "u1 leaves")
+	team, err = repo.GetTeam(ctx, "t1")
+	must(t, err, "get t1 after leave")
+	wantEqual(t, team.ExternalBots, []store.TeamExternalBot{{AppID: "cli_delta", Name: "Delta", RegisteredBy: "u2", RegisteredAt: 600}}, "external bots after leave")
+
+	// An orphan (its registrant left without the cleanup) is replaceable by
+	// a current member, and the creator removes anyone's entry.
+	must(t, repo.AddTeamMember(ctx, "t1", "u3"), "add u3")
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_orphan", Name: "Orphan", RegisteredBy: "u3", RegisteredAt: 610}), "u3 adds orphan-to-be")
+	must(t, repo.RemoveTeamMember(ctx, "t1", "u3"), "u3 leaves without cleanup")
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_orphan", Name: "Adopted", RegisteredBy: "u2", RegisteredAt: 620}), "u2 takes over the orphan")
+	removed, err = repo.RemoveTeamExternalBot(ctx, "t1", "cli_orphan", "u2", "u1")
+	must(t, err, "creator u1 removes u2's entry")
+	if !removed {
+		t.Fatal("creator removal did nothing")
+	}
+	team, err = repo.GetTeam(ctx, "t1")
+	must(t, err, "get t1 after orphan")
+	wantEqual(t, team.ExternalBots, []store.TeamExternalBot{{AppID: "cli_delta", Name: "Delta", RegisteredBy: "u2", RegisteredAt: 600}}, "external bots after orphan")
+
+	// A botmux bot is recognised by its appId on any active machine.
+	_, err = repo.BindMachineCAS(ctx, "m-ext", "u2", "Bob")
+	must(t, err, "bind m-ext")
+	must(t, repo.PersistRegister(ctx, store.RegisterMachine{MachineID: "m-ext", UnionID: "u2", Name: "box", BotmuxVersion: "1.0.0", Bots: []store.BotInfo{{AppID: "cli_onbotmux", Name: "On botmux"}}, LastSeen: 1}), "register m-ext")
+	for appID, want := range map[string]bool{"cli_onbotmux": true, "cli_delta": false} {
+		got, err := repo.MachineReportsBot(ctx, appID)
+		must(t, err, "machine reports "+appID)
+		if got != want {
+			t.Fatalf("MachineReportsBot(%s) = %v, want %v", appID, got, want)
+		}
+	}
+	must(t, repo.RetireMachine(ctx, "m-ext"), "retire m-ext")
+	if got, err := repo.MachineReportsBot(ctx, "cli_onbotmux"); err != nil || got {
+		t.Fatalf("retired machine still reports its bot: %v %v", got, err)
+	}
+
+	// The cap holds at write time.
+	for i := len(team.ExternalBots); i < store.MaxTeamExternalBots; i++ {
+		must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: fmt.Sprintf("cli_fill%02d", i), Name: "Fill", RegisteredBy: "u2", RegisteredAt: 700}), "fill")
+	}
+	wantErr(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_over", Name: "Over", RegisteredBy: "u2", RegisteredAt: 800}), store.ErrConflict, "over the cap")
+	// Updating an existing entry still works at the cap.
+	must(t, repo.PutTeamExternalBot(ctx, "t1", store.TeamExternalBot{AppID: "cli_delta", Name: "Delta 2", RegisteredBy: "u2", RegisteredAt: 900}), "update at the cap")
+	team, err = repo.GetTeam(ctx, "t1")
+	must(t, err, "get t1 at the cap")
+	if len(team.ExternalBots) != store.MaxTeamExternalBots || team.ExternalBots[0].Name != "Delta 2" {
+		t.Fatalf("external bots at the cap = %d, first %+v", len(team.ExternalBots), team.ExternalBots[0])
+	}
+
+	wantErr(t, repo.PutTeamExternalBot(ctx, "missing", alpha), store.ErrNotFound, "put on a missing team")
+	_, err = repo.RemoveTeamExternalBot(ctx, "missing", "cli_alpha", "u1", "u1")
+	wantErr(t, err, store.ErrNotFound, "remove on a missing team")
+	wantErr(t, repo.RemoveTeamExternalBotsBy(ctx, "missing", "u1"), store.ErrNotFound, "leave cleanup on a missing team")
+
+	// CreateTeam writes the same physical shape as PutTeamExternalBot.
+	must(t, repo.CreateTeam(ctx, store.TeamDoc{ID: "t2", Name: "Seeded", Members: []string{"u1"}, CreatedBy: "u1", ExternalBots: []store.TeamExternalBot{alpha}}), "create seeded")
+	seeded, err := repo.GetTeam(ctx, "t2")
+	must(t, err, "get seeded")
+	wantEqual(t, seeded.ExternalBots, []store.TeamExternalBot{alpha}, "seeded external bots")
 }
 
 func testDevices(t *testing.T, db store.DocumentDatabase) {

@@ -257,7 +257,7 @@ func isFeishuMutation(method, path string) bool {
 	if method == http.MethodPost && (path == "/api/teams" || path == "/api/teams/accept" || path == "/api/groups/create") {
 		return true
 	}
-	if method == http.MethodDelete && deleteTeamPattern.MatchString(path) {
+	if method == http.MethodDelete && (deleteTeamPattern.MatchString(path) || externalBotOnePattern.MatchString(path)) {
 		return true
 	}
 	if method != http.MethodPost {
@@ -265,7 +265,8 @@ func isFeishuMutation(method, path string) bool {
 	}
 	return renameTeamPattern.MatchString(path) || leaveTeamPattern.MatchString(path) ||
 		hallJoinPattern.MatchString(path) || inviteTeamPattern.MatchString(path) ||
-		inviteUserPattern.MatchString(path) || teamBotsPattern.MatchString(path)
+		inviteUserPattern.MatchString(path) || teamBotsPattern.MatchString(path) ||
+		externalBotsPattern.MatchString(path)
 }
 
 func (a *Apex) handleAuth(w http.ResponseWriter, r *http.Request) bool {
@@ -1211,6 +1212,11 @@ func freshSSOTier(path, method string) ssoTier {
 		return ssoTierStrict
 	}
 	if strictTeamInvitePattern.MatchString(path) && method == http.MethodPost {
+		return ssoTierStrict
+	}
+	// Registering an external bot hands a bot outside botmux teammate trust
+	// on every member's bots: a durable grant, same class as an invite.
+	if externalBotsPattern.MatchString(path) && method == http.MethodPost {
 		return ssoTierStrict
 	}
 	if hasPathPrefix(path, "/api/teams") {

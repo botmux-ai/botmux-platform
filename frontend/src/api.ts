@@ -153,6 +153,75 @@ export interface RosterMember {
   machines: RosterMachine[];
 }
 
+/**
+ * 外部机器人：不跑在 botmux 上的飞书机器人（其它框架、托管 Agent 平台等），由团队成员手动登记。
+ * 登记人为它担保：登记人退出团队时它随之移除；登记人或团队管理员可以移除。
+ * unionId 可选——不填时 botmux 机器人只在团队群（大厅/平台拉的群）里认它。
+ */
+export interface TeamExternalBot {
+  appId: string;
+  name: string;
+  unionId?: string;
+  registeredBy: string;
+  registeredByName: string;
+  registeredAt: number;
+}
+
+export interface TeamRoster {
+  members: RosterMember[];
+  externalBots: TeamExternalBot[];
+}
+
+export interface ExternalBotInput {
+  appId: string;
+  name: string;
+  unionId?: string;
+}
+
+const FEISHU_APP_ID = /^cli_[0-9A-Za-z]{8,40}$/;
+const FEISHU_UNION_ID = /^on_[0-9A-Za-z]{8,64}$/;
+
+/** 与服务端同一套校验，提交前给出人话提示；返回 null 表示可提交。 */
+export function validateExternalBotInput(input: ExternalBotInput): string | null {
+  if (!FEISHU_APP_ID.test(input.appId.trim())) return 'App ID 应形如 cli_xxxxxxxx（飞书开放平台「凭证与基础信息」页）';
+  if (!input.name.trim()) return '请填写机器人名称';
+  const unionId = (input.unionId || '').trim();
+  if (unionId && !FEISHU_UNION_ID.test(unionId)) return 'union_id 应以 on_ 开头（ou_ 开头的 open_id 只对单个应用有效，不能用）';
+  return null;
+}
+
+/** 登记/移除外部机器人的服务端错误码 → 人话。 */
+export function externalBotErrorText(code: string | undefined): string {
+  switch (code) {
+    case 'invalid_app_id':
+      return 'App ID 格式不对';
+    case 'invalid_union_id':
+      return 'union_id 格式不对（应以 on_ 开头）';
+    case 'name_required':
+      return '请填写机器人名称';
+    case 'platform_app':
+      return '这是平台自己的应用，无需登记';
+    case 'already_team_bot':
+      return '它已经是本团队的 botmux 机器人，请在「管理我的机器人」里管理';
+    case 'botmux_bot':
+      return '它跑在 botmux 上，请它的主人在「管理我的机器人」里把它加入团队';
+    case 'registered_by_other':
+      return '其他成员已经登记过这个机器人';
+    case 'too_many_external_bots':
+      return '本团队的外部机器人已达上限';
+    case 'not_registrant':
+      return '只有登记人或团队管理员可以移除';
+    case 'external_bot_not_found':
+      return '这个外部机器人已经不在团队里了';
+    case 'not_in_team':
+      return '你已不在该团队';
+    case 'feishu_writes_disabled':
+      return '平台暂时关闭了飞书写操作，请稍后再试';
+    default:
+      return code ? `操作失败（${code}）` : '操作失败';
+  }
+}
+
 export interface UserHit {
   unionId: string;
   openId: string;
@@ -485,11 +554,34 @@ export async function acceptInvite(invite: string): Promise<{ status: number; te
   return { status: r.status };
 }
 
-export async function getRoster(id: string): Promise<RosterMember[] | null> {
+/** 名册 + 外部机器人（旧平台没有 externalBots 字段时按空列表处理）。 */
+export async function getTeamRoster(id: string): Promise<TeamRoster | null> {
   const r = await api(`/api/teams/${id}/roster`);
   if (r.status !== 200) return null;
   const j = await r.json();
-  return j.members;
+  return { members: j.members, externalBots: Array.isArray(j.externalBots) ? j.externalBots : [] };
+}
+
+/** 登记外部机器人；同一登记人再次提交同一 appId = 更新名称 / union_id。 */
+export async function addExternalBot(
+  id: string,
+  input: ExternalBotInput,
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const body: ExternalBotInput = { appId: input.appId.trim(), name: input.name.trim() };
+  const unionId = (input.unionId || '').trim();
+  if (unionId) body.unionId = unionId;
+  const r = await jsonPost(`/api/teams/${id}/external-bots`, body);
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  return { ok: r.status === 200, status: r.status, error: j.error };
+}
+
+export async function removeExternalBot(
+  id: string,
+  appId: string,
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const r = await api(`/api/teams/${id}/external-bots/${encodeURIComponent(appId)}`, { method: 'DELETE' });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  return { ok: r.status === 200, status: r.status, error: j.error };
 }
 
 // 改机器人「默认目录模式」（仅机器 owner）：平台经隧道调本机 dashboard，daemon 校验目录存在并落盘，

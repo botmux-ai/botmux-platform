@@ -32,19 +32,23 @@ import {
   IconMore,
   IconLock,
 } from '@arco-design/web-react/icon';
-import type { Team, RosterMember, RosterMachine, CreateGroupResult, TeamBotRef, Bot, BotDirMode } from '../api';
+import type { Team, RosterMember, RosterMachine, CreateGroupResult, TeamBotRef, Bot, BotDirMode, TeamExternalBot } from '../api';
 import {
   createTeam,
   leaveTeam,
   disbandTeam,
   renameTeam,
   acceptInvite,
-  getRoster,
+  getTeamRoster,
   createGroup,
   updateTeamBots,
   joinHall,
   setBotDirMode,
   putTeamAdmins,
+  addExternalBot,
+  removeExternalBot,
+  validateExternalBotInput,
+  externalBotErrorText,
 } from '../api';
 import InvitePanel from './InvitePanel';
 import { CoManagerModal } from './CoManagers';
@@ -308,20 +312,27 @@ function BotDirModal({
 }
 
 // 每个团队卡片自己拉名册（挂载即拉 + 轮询），卡片概览/详情/弹窗共享同一份数据。
-function useRoster(teamId: string): { members: RosterMember[] | null; unavailable: boolean; reload: () => void } {
+function useRoster(teamId: string): {
+  members: RosterMember[] | null;
+  externalBots: TeamExternalBot[];
+  unavailable: boolean;
+  reload: () => void;
+} {
   const [members, setMembers] = useState<RosterMember[] | null>(null);
+  const [externalBots, setExternalBots] = useState<TeamExternalBot[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   const alive = useRef(true);
 
   async function load() {
-    const r = await getRoster(teamId);
+    const r = await getTeamRoster(teamId);
     if (!alive.current) return;
     if (r === null) {
       setUnavailable(true);
       return;
     }
     setUnavailable(false);
-    setMembers(r);
+    setMembers(r.members);
+    setExternalBots(r.externalBots);
   }
 
   useEffect(() => {
@@ -335,7 +346,7 @@ function useRoster(teamId: string): { members: RosterMember[] | null; unavailabl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId]);
 
-  return { members, unavailable, reload: load };
+  return { members, externalBots, unavailable, reload: load };
 }
 
 // 头像列：一排小头像 + 溢出「+N」，每个头像 hover 出名字。不用 Avatar.Group 是为了给每个头像包 Tooltip。
@@ -888,6 +899,149 @@ function MachineRow({
 
 // 团队卡片：概览（成员/机器人头像列）+ 常驻操作栏（拉群 / 管理我的机器人 / 邀请成员）+ 可展开的成员详情。
 // 低频与危险操作（加入机器人大厅、解散/退出）收进右上角 ⋯ 菜单。
+// 「外部机器人」弹窗：登记不跑在 botmux 上的飞书机器人。登记人为它担保：它进机器人大厅和团队名册，
+// 团队里的 botmux 机器人免 /grant 认它；登记人退出团队时一并移除。登记人或管理员可移除。
+function ExternalBotsModal({
+  teamId,
+  visible,
+  bots,
+  myUnionId,
+  isAdmin,
+  onClose,
+  onChanged,
+}: {
+  teamId: string;
+  visible: boolean;
+  bots: TeamExternalBot[];
+  myUnionId: string;
+  isAdmin: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [appId, setAppId] = useState('');
+  const [name, setName] = useState('');
+  const [unionId, setUnionId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  function editOwn(b: TeamExternalBot) {
+    setAppId(b.appId);
+    setName(b.name);
+    setUnionId(b.unionId || '');
+  }
+
+  async function add() {
+    const input = { appId, name, unionId };
+    const invalid = validateExternalBotInput(input);
+    if (invalid) {
+      Message.warning(invalid);
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await addExternalBot(teamId, input);
+      if (!r.ok) {
+        Message.error(externalBotErrorText(r.error));
+        return;
+      }
+      Message.success('已登记，稍后会被拉进机器人大厅');
+      setAppId('');
+      setName('');
+      setUnionId('');
+      onChanged();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(b: TeamExternalBot) {
+    setRemoving(b.appId);
+    try {
+      const r = await removeExternalBot(teamId, b.appId);
+      if (!r.ok) {
+        Message.error(externalBotErrorText(r.error));
+        return;
+      }
+      Message.success(`已移除 ${b.name}`);
+      onChanged();
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  return (
+    <Modal title="外部机器人" visible={visible} onCancel={onClose} footer={null} style={{ width: 560 }}>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+        不跑在 botmux 上的飞书机器人（其它框架、托管 Agent 平台等）可以由你登记进团队：它会被拉进机器人大厅，
+        团队里的 botmux 机器人不用 /grant 就认它，团队 Agent 也能发现它、把它拉进团队群。你为它担保——你退出团队时它会一并移除。
+      </Typography.Paragraph>
+      {bots.length === 0 ? (
+        <Typography.Text type="secondary">还没有外部机器人</Typography.Text>
+      ) : (
+        bots.map((b) => {
+          const mine = b.registeredBy === myUnionId;
+          return (
+            <div className="roster-member" key={b.appId}>
+              <Space align="center" size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Space align="center" size={6} wrap>
+                  <IconRobot />
+                  <Typography.Text bold style={{ fontSize: 13 }}>
+                    {b.name}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {b.appId} · {mine ? '我登记的' : `${b.registeredByName} 登记`}
+                  </Typography.Text>
+                  {!b.unionId && (
+                    <Tooltip content="没填 union_id：botmux 机器人只在团队群（大厅/平台拉的群）里认它">
+                      <Tag size="small" color="orange">
+                        仅团队群
+                      </Tag>
+                    </Tooltip>
+                  )}
+                </Space>
+                <Space size={4}>
+                  {mine && (
+                    <Button size="mini" type="text" onClick={() => editOwn(b)}>
+                      编辑
+                    </Button>
+                  )}
+                  {(mine || isAdmin) && (
+                    <Button
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      loading={removing === b.appId}
+                      onClick={() => remove(b)}
+                    >
+                      移除
+                    </Button>
+                  )}
+                </Space>
+              </Space>
+            </div>
+          );
+        })
+      )}
+      <div style={{ marginTop: 16 }}>
+        <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>登记 / 更新</Typography.Text>
+        <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+          <Input placeholder="App ID（cli_ 开头）" value={appId} onChange={setAppId} disabled={saving} />
+          <Input placeholder="机器人名称（与飞书里显示的一致，便于按名字 @ 和拉群）" value={name} maxLength={64} onChange={setName} disabled={saving} />
+          <Input
+            placeholder="union_id（可选，on_ 开头；填了它在任意共同群里都被认作队友）"
+            value={unionId}
+            onChange={setUnionId}
+            disabled={saving}
+          />
+          <Button type="primary" size="small" icon={<IconPlus />} loading={saving} onClick={add}>
+            登记
+          </Button>
+        </Space>
+      </div>
+    </Modal>
+  );
+}
+
 function TeamCard({
   team: t,
   myUnionId,
@@ -899,7 +1053,7 @@ function TeamCard({
   botQuery: string;
   onChanged: () => void;
 }) {
-  const { members, unavailable, reload } = useRoster(t.teamId);
+  const { members, externalBots, unavailable, reload } = useRoster(t.teamId);
   const isCreator = t.createdBy === myUnionId;
   const isAdmin = isCreator || (Array.isArray(t.admins) && t.admins.includes(myUnionId));
 
@@ -912,6 +1066,7 @@ function TeamCard({
   const [manageOpen, setManageOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [dirOpen, setDirOpen] = useState(false);
+  const [externalOpen, setExternalOpen] = useState(false);
   const [adminsOpen, setAdminsOpen] = useState(false);
   const [adminDraft, setAdminDraft] = useState<string[]>([]);
   const [savingAdmins, setSavingAdmins] = useState(false);
@@ -1250,6 +1405,20 @@ function TeamCard({
                 />
               )}
             </div>
+            {externalBots.length > 0 && (
+              <div className="team-strip">
+                <span className="team-strip-label">外部机器人 {externalBots.length}</span>
+                <Space size={4} wrap>
+                  {externalBots.map((b) => (
+                    <Tooltip key={b.appId} content={`${b.registeredByName} 登记`}>
+                      <Tag size="small" icon={<IconRobot />}>
+                        {b.name}
+                      </Tag>
+                    </Tooltip>
+                  ))}
+                </Space>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1283,6 +1452,9 @@ function TeamCard({
           <Button size="small" icon={<IconRobot />} disabled={!members} onClick={() => setManageOpen(true)}>
             管理我的机器人
           </Button>
+          <Button size="small" icon={<IconRobot />} disabled={!members} onClick={() => setExternalOpen(true)}>
+            外部机器人
+          </Button>
           <Button size="small" icon={<IconUserAdd />} onClick={() => setInviteOpen(true)}>
             邀请成员
           </Button>
@@ -1308,6 +1480,15 @@ function TeamCard({
 
       {showDetail && <div style={{ marginTop: 4 }}>{detail}</div>}
 
+      <ExternalBotsModal
+        teamId={t.teamId}
+        visible={externalOpen}
+        bots={externalBots}
+        myUnionId={myUnionId}
+        isAdmin={isAdmin}
+        onClose={() => setExternalOpen(false)}
+        onChanged={reload}
+      />
       {teamMembers && (
         <CreateGroupModal teamName={t.teamName} members={teamMembers} myUnionId={myUnionId} visible={groupOpen} onClose={() => setGroupOpen(false)} />
       )}

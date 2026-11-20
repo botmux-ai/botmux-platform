@@ -10,12 +10,16 @@ import (
 // Bot is one team-sync roster entry. UnionID and Name are optional on the wire
 // for compatibility with bots whose identity has not yet been learned.
 // OwnerUnionID is the bot's machine owner, always taken from the current
-// MachineDoc (never from the daemon), and is absent when it is unknown.
+// MachineDoc (never from the daemon), and is absent when it is unknown; for an
+// external bot it is the member who registered it. External marks a bot that
+// runs outside botmux (never a bot of the receiving machine); daemons that do
+// not know the field ignore it.
 type Bot struct {
 	AppID        string `json:"appId"`
 	UnionID      string `json:"unionId,omitempty"`
 	Name         string `json:"name,omitempty"`
 	OwnerUnionID string `json:"ownerUnionId,omitempty"`
+	External     bool   `json:"external,omitempty"`
 }
 
 // Team is the daemon-facing team-sync payload.

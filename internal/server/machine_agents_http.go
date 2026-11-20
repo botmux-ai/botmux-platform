@@ -18,8 +18,10 @@ import (
 // owner must be a member of the team, and the result aggregates every team
 // member's registered machines (offline ones included). The opt-in gate is
 // team.bots — not showInTeam — so a bot is discoverable only once its owner
-// added it to the team. specialties / mentionable are self-reported labels,
-// passed through for display and never treated as credentials.
+// added it to the team. External bots (team.externalBots, registered by a
+// current member) follow, marked external. specialties / mentionable are
+// self-reported labels, passed through for display and never treated as
+// credentials.
 
 // agentOwner is AgentView.owner.
 type agentOwner struct {
@@ -40,6 +42,9 @@ type agentView struct {
 	Owner       agentOwner `json:"owner"`
 	MachineID   string     `json:"machineId"`
 	MachineName string     `json:"machineName"`
+	// External marks a bot that runs outside botmux: no machine, and online
+	// is not a heartbeat (the platform cannot observe it).
+	External bool `json:"external,omitempty"`
 }
 
 type agentsResponse struct {
@@ -125,6 +130,7 @@ func (a *Apex) handleMachineAgentsAPI(w http.ResponseWriter, r *http.Request) bo
 	for _, doc := range docs {
 		agents = append(agents, a.agentsFromMachine(doc, teamBotKeys, now)...)
 	}
+	agents = append(agents, a.externalAgents(r, team, docs)...)
 	collator := newLocaleCollator()
 	sort.SliceStable(agents, func(i, j int) bool {
 		if c := collator.compare(agents[i].Owner.Name, agents[j].Owner.Name); c != 0 {
@@ -138,6 +144,36 @@ func (a *Apex) handleMachineAgentsAPI(w http.ResponseWriter, r *http.Request) bo
 	slog.Info("team-agents query", "byUnionId", principal.UnionID, "byMachineId", principal.MachineID, "teamId", teamID, "agentCount", len(agents))
 	writeJSONNoStore(w, http.StatusOK, agentsResponse{TeamID: teamID, TeamName: team.Name, Agents: agents})
 	return true
+}
+
+// externalAgents lists the team's active external bots. The owner is the
+// member who registered the bot; a failed profile read degrades to the
+// unionId prefix, as the roster does.
+func (a *Apex) externalAgents(r *http.Request, team store.TeamDoc, memberMachines []store.MachineDoc) []agentView {
+	active := team.ActiveExternalBots(memberMachines)
+	if len(active) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(active))
+	for _, bot := range active {
+		ids = append(ids, bot.RegisteredBy)
+	}
+	profiles, err := a.Repository.GetUserProfiles(r.Context(), ids)
+	if err != nil {
+		profiles = nil
+	}
+	out := make([]agentView, 0, len(active))
+	for _, bot := range active {
+		out = append(out, agentView{
+			AppID: bot.AppID, UnionID: bot.UnionID, Name: bot.Name, Specialties: []string{},
+			// Feishu delivers to it whenever its own service runs; the
+			// platform has no heartbeat to say otherwise.
+			Mentionable: true, Online: true,
+			Owner:    agentOwner{UnionID: bot.RegisteredBy, Name: first(profiles[bot.RegisteredBy].Name, jsSlice(bot.RegisteredBy, 12))},
+			External: true,
+		})
+	}
+	return out
 }
 
 // listMachinesForMembers is listMachinesForUsers: an empty member list is an

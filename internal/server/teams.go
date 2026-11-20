@@ -221,7 +221,12 @@ func (a *Apex) handleTeamEndpoints(w http.ResponseWriter, r *http.Request, sessi
 			writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
 			return true
 		}
-		writeJSON(w, http.StatusOK, rosterResponse{TeamID: team.ID, TeamName: team.Name, Members: members})
+		machines, err := a.listMachinesForMembers(r, team.Members)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
+			return true
+		}
+		writeJSON(w, http.StatusOK, rosterResponse{TeamID: team.ID, TeamName: team.Name, Members: members, ExternalBots: rosterExternalBots(team, members, machines)})
 		return true
 	}
 	if match := teamBotsPattern.FindStringSubmatch(path); match != nil && r.Method == http.MethodPost {
@@ -231,7 +236,7 @@ func (a *Apex) handleTeamEndpoints(w http.ResponseWriter, r *http.Request, sessi
 		a.updateTeamBots(w, r, session, match[1])
 		return true
 	}
-	return false
+	return a.handleTeamExternalBots(w, r, session, sessionErr)
 }
 
 // teamNameFromBody is `(body?.name || "").trim().slice(0, 64)`.
@@ -312,9 +317,23 @@ func (a *Apex) leaveTeam(w http.ResponseWriter, r *http.Request, session *auth.S
 		writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
 		return
 	}
+	// External bots the leaver registered lose the member who vouched for
+	// them. Readers also skip bots whose registrant is no longer a member,
+	// so this is the tidy-up, not the only guard.
+	if err := a.Repository.RemoveTeamExternalBotsBy(r.Context(), teamID, session.UnionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
+		return
+	}
 	if err := a.Repository.RemoveTeamMember(r.Context(), teamID, session.UnionID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
 		return
+	}
+	// Once more after the membership is gone: a registration that was in
+	// flight during the first pass passed its member check before the
+	// removal, and none can pass it now. Best effort; readers skip entries
+	// of non-members, and a rejoin purges them.
+	if err := a.Repository.RemoveTeamExternalBotsBy(r.Context(), teamID, session.UnionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.Warn("second external bot cleanup on leave", "teamId", teamID, "unionId", session.UnionID, "error", err)
 	}
 	// Leaving drops the co-manager grants this team justified on other
 	// members' machines. teams and machines are separate collections, so
@@ -384,6 +403,19 @@ func (a *Apex) acceptInvite(w http.ResponseWriter, r *http.Request, session *aut
 	payload, err := auth.VerifyTeamInvite(a.Config, invite)
 	if err != nil || payload == nil {
 		writeJSON(w, http.StatusBadRequest, apexError{Error: "invalid_or_expired_invite"})
+		return
+	}
+	// Rejoining is not a new vouch: external bots someone registered during
+	// an earlier membership go before they are a member again (a leave that
+	// raced a registration can leave one behind). Not for a current member
+	// accepting twice.
+	if team, err := a.Repository.GetTeam(r.Context(), payload.TeamID); err == nil && !contains(team.Members, session.UnionID) && len(team.ExternalBots) > 0 {
+		if err := a.Repository.RemoveTeamExternalBotsBy(r.Context(), payload.TeamID, session.UnionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
+			return
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusServiceUnavailable, apexError{Error: "store_unavailable"})
 		return
 	}
 	if err := a.Repository.AddTeamMember(r.Context(), payload.TeamID, session.UnionID); err != nil {
@@ -737,9 +769,10 @@ type inviteResponse struct {
 }
 
 type rosterResponse struct {
-	TeamID   string         `json:"teamId"`
-	TeamName string         `json:"teamName"`
-	Members  []rosterMember `json:"members"`
+	TeamID       string              `json:"teamId"`
+	TeamName     string              `json:"teamName"`
+	Members      []rosterMember      `json:"members"`
+	ExternalBots []rosterExternalBot `json:"externalBots"`
 }
 
 type rosterMember struct {

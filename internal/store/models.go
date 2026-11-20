@@ -113,6 +113,19 @@ type TeamBotRef struct {
 	AppID     string `json:"appId" bson:"appId"`
 }
 
+// TeamExternalBot is a Feishu bot that runs outside botmux (no bound
+// machine reports it) and that a team member added to the team. The member
+// vouches for it: RegisteredBy is that member, and the bot is honoured only
+// while they are still in the team. UnionID is optional; without it botmux
+// bots trust the bot only inside the team's own group chats.
+type TeamExternalBot struct {
+	AppID        string `json:"appId" bson:"appId"`
+	Name         string `json:"name" bson:"name"`
+	UnionID      string `json:"unionId,omitempty" bson:"unionId,omitempty"`
+	RegisteredBy string `json:"registeredBy" bson:"registeredBy"`
+	RegisteredAt int64  `json:"registeredAt" bson:"registeredAt,truncate"`
+}
+
 type PendingInvite struct {
 	UnionID   string `json:"unionId" bson:"unionId"`
 	OpenID    string `json:"openId,omitempty" bson:"openId,omitempty"`
@@ -127,9 +140,11 @@ type TeamDoc struct {
 	Name           string          `json:"name" bson:"name"`
 	Members        []string        `json:"members" bson:"members"`
 	Bots           []TeamBotRef    `json:"bots,omitempty" bson:"bots,omitempty"`
-	HallChatID     string          `json:"hallChatId,omitempty" bson:"hallChatId,omitempty"`
+	HallChatID    string          `json:"hallChatId,omitempty" bson:"hallChatId,omitempty"`
 	GroupChatIDs   []string        `json:"groupChatIds,omitempty" bson:"groupChatIds,omitempty"`
 	PendingInvites []PendingInvite `json:"pendingInvites,omitempty" bson:"pendingInvites,omitempty"`
+	// ExternalBots are bots without a botmux machine, added by members.
+	ExternalBots []TeamExternalBot `json:"externalBots,omitempty" bson:"externalBots,omitempty"`
 	// RepoPresets is the Issue Board preset repository list.
 	RepoPresets []TeamRepoPreset `json:"repoPresets,omitempty" bson:"repoPresets,omitempty"`
 	// IssueForm is the customizable Issue Board create form; nil means

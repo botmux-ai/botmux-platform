@@ -143,8 +143,8 @@ func readMachineGroupBody(r *http.Request) machineGroupBody {
 
 // resolveOptedInBots maps each requested appId to its owner: the bot must be
 // referenced by team.bots on a machine of a current member that still runs
-// it. RETIRED / unregistered machines and departed owners are orphan
-// references and skipped.
+// it, or be an active external bot of the team. RETIRED / unregistered
+// machines and departed owners are orphan references and skipped.
 func resolveOptedInBots(team store.TeamDoc, appIDs []string, docByID map[string]store.MachineDoc) map[string]string {
 	ownerByApp := make(map[string]string)
 	for _, ref := range team.Bots {
@@ -162,6 +162,19 @@ func resolveOptedInBots(team store.TeamDoc, appIDs []string, docByID map[string]
 			continue
 		}
 		ownerByApp[ref.AppID] = doc.UnionID
+	}
+	// External bots: the owner pulled in with the bot is the member who
+	// registered it (ActiveExternalBots already drops departed registrants
+	// and appIds a member machine runs).
+	memberMachines := make([]store.MachineDoc, 0, len(docByID))
+	for _, doc := range docByID {
+		memberMachines = append(memberMachines, doc)
+	}
+	for _, bot := range team.ActiveExternalBots(memberMachines) {
+		if _, done := ownerByApp[bot.AppID]; done || !slices.Contains(appIDs, bot.AppID) {
+			continue
+		}
+		ownerByApp[bot.AppID] = bot.RegisteredBy
 	}
 	return ownerByApp
 }

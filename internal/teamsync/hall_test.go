@@ -272,3 +272,100 @@ func TestTeamEntryBackfillHonoursWriteSwitch(t *testing.T) {
 		t.Fatalf("feishu calls with writes disabled: %d", n)
 	}
 }
+
+func TestTeamEntryListsActiveExternalBots(t *testing.T) {
+	f := newHallFixture(t, "oc_hall")
+	f.service.SetFeishuWrites(false)
+	ctx := context.Background()
+	for _, member := range []string{"on_member", "on_left"} {
+		if err := f.repo.AddTeamMember(ctx, "team1", member); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, bot := range []store.TeamExternalBot{
+		{AppID: "cli_ext", Name: "Outside", UnionID: "on_ext", RegisteredBy: "on_member", RegisteredAt: 1},
+		// No union_id yet: still listed, daemons trust it in team groups only.
+		{AppID: "cli_ext_nouid", Name: "Outside 2", RegisteredBy: "on_owner", RegisteredAt: 2},
+		// Its registrant leaves below without the cleanup.
+		{AppID: "cli_orphan", Name: "Orphan", UnionID: "on_orphan", RegisteredBy: "on_left", RegisteredAt: 3},
+		// A botmux bot of the team already uses this appId.
+		{AppID: "cli_a", Name: "Impostor", UnionID: "on_impostor", RegisteredBy: "on_member", RegisteredAt: 4},
+		// A member machine runs this one on botmux (not opted in): listing
+		// it would make that daemon trust on_private on all its bots.
+		{AppID: "cli_private", Name: "Private", UnionID: "on_private", RegisteredBy: "on_member", RegisteredAt: 5},
+	} {
+		if err := f.repo.PutTeamExternalBot(ctx, "team1", bot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.repo.RemoveTeamMember(ctx, "team1", "on_left"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.PersistRegister(ctx, store.RegisterMachine{
+		MachineID: "aa11bb22cc33dd44", UnionID: "on_owner", OwnerName: "Owner", Name: "box",
+		Bots: []store.BotInfo{{AppID: "cli_a", Name: "Alpha"}, {AppID: "cli_private", Name: "Private"}}, LastSeen: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok, err := f.service.teamEntry(ctx, "team1", nil)
+	if err != nil || !ok {
+		t.Fatalf("teamEntry ok=%v err=%v", ok, err)
+	}
+	want := []Bot{
+		{AppID: "cli_a", Name: "Alpha", OwnerUnionID: "on_owner"},
+		{AppID: "cli_ext", UnionID: "on_ext", Name: "Outside", OwnerUnionID: "on_member", External: true},
+		{AppID: "cli_ext_nouid", Name: "Outside 2", OwnerUnionID: "on_owner", External: true},
+	}
+	if !reflect.DeepEqual(entry.Bots, want) {
+		t.Fatalf("bots = %+v, want %+v", entry.Bots, want)
+	}
+}
+
+func TestSyncHallMembersBuildsHallWithExternalBots(t *testing.T) {
+	f := newHallFixture(t, "")
+	ctx := context.Background()
+	if err := f.repo.PutTeamExternalBot(ctx, "team1", store.TeamExternalBot{AppID: "cli_ext", Name: "Outside", RegisteredBy: "on_owner", RegisteredAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.SyncHallMembers(ctx, "team1", []string{"cli_ext"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The new hall's bots are added in batches right after the chat exists.
+	var added strings.Builder
+	for _, call := range f.feishu.find(http.MethodPost, "/open-apis/im/v1/chats/oc_built/members") {
+		added.WriteString(call.Body)
+	}
+	if !strings.Contains(added.String(), `"cli_a"`) || !strings.Contains(added.String(), `"cli_ext"`) {
+		t.Fatalf("hall members added = %s, want both the botmux bot and the external bot", added.String())
+	}
+	// The teach @ is for botmux bots only: no daemon runs an external bot.
+	for _, message := range f.feishu.find(http.MethodPost, "/open-apis/im/v1/messages") {
+		if strings.Contains(message.Body, "Outside") {
+			t.Fatalf("external bot was hall-taught: %s", message.Body)
+		}
+	}
+}
+
+func TestSyncHallMembersKeepsBotsTheHallStillHolds(t *testing.T) {
+	f := newHallFixture(t, "oc_hall")
+	ctx := context.Background()
+	if err := f.repo.PutTeamExternalBot(ctx, "team1", store.TeamExternalBot{AppID: "cli_ext", Name: "Outside", RegisteredBy: "on_owner", RegisteredAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// A stale removal list: cli_a is still a botmux bot of the team and
+	// cli_ext still an active external bot; only cli_gone may leave.
+	if err := f.service.SyncHallMembers(ctx, "team1", nil, []string{"cli_a", "cli_ext", "cli_gone"}); err != nil {
+		t.Fatal(err)
+	}
+	removals := f.feishu.find(http.MethodDelete, "/open-apis/im/v1/chats/oc_hall/members")
+	if len(removals) != 1 || strings.Contains(removals[0].Body, "cli_a\"") || strings.Contains(removals[0].Body, "cli_ext") || !strings.Contains(removals[0].Body, "cli_gone") {
+		t.Fatalf("hall removals = %+v", removals)
+	}
+	// Nothing left to remove: no call at all.
+	if err := f.service.SyncHallMembers(ctx, "team1", nil, []string{"cli_ext"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.feishu.find(http.MethodDelete, "/open-apis/im/v1/chats/oc_hall/members")); n != 1 {
+		t.Fatalf("hall removals = %d, want still 1", n)
+	}
+}

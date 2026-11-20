@@ -62,6 +62,10 @@ type TeamRepository interface {
 	RenameTeam(context.Context, string, string) error
 	DeleteTeam(context.Context, string) error
 	RemoveUserBotsFromTeam(context.Context, string, []string) error
+	PutTeamExternalBot(ctx context.Context, teamID string, bot TeamExternalBot) error
+	RemoveTeamExternalBot(ctx context.Context, teamID, appID, registeredBy, actor string) (bool, error)
+	RemoveTeamExternalBotsBy(ctx context.Context, teamID, registeredBy string) error
+	MachineReportsBot(ctx context.Context, appID string) (bool, error)
 }
 
 // Repository is the authoritative machine/user/team persistence contract.

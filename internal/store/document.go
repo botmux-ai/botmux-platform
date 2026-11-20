@@ -397,6 +397,9 @@ func (s *DocumentRepository) CreateTeam(ctx context.Context, t TeamDoc) error {
 	if len(t.Bots) > 0 {
 		document["bots"] = t.Bots
 	}
+	if len(t.ExternalBots) > 0 {
+		document["externalBots"] = externalBotDocuments(t.ExternalBots)
+	}
 	if len(t.GroupChatIDs) > 0 {
 		document["groupChatIds"] = t.GroupChatIDs
 	}

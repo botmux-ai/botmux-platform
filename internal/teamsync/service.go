@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -159,6 +160,10 @@ func (s *Service) teamEntry(ctx context.Context, teamID string, provided *store.
 			unlearnedLive = append(unlearnedLive, TeachCandidate{AppID: ref.AppID, Name: info.Name})
 		}
 	}
+	// External bots run outside botmux: no machine reports them, so their
+	// identity is what the registering member entered, and the owner is that
+	// member. They are never hall-taught (no daemon would observe the @).
+	bots = append(bots, s.externalBots(ctx, team)...)
 	if hallID != "" && len(unlearnedLive) > 0 {
 		if names := s.PickHallTeachBackfill(team.ID, unlearnedLive, time.Now()); len(names) > 0 {
 			s.scheduleHallTeach(team, hallID, names)
@@ -179,6 +184,28 @@ func (s *Service) teamEntry(ctx context.Context, teamID string, provided *store.
 	return entry, true, nil
 }
 
+// externalBots is the roster part for the team's active external bots. An
+// appId that any member machine reports is a botmux bot and never listed as
+// external: a daemon trusts a roster entry whose appId is local to it on
+// every bot of its machine. A failed machine read lists none (fail closed:
+// a missing entry only means /grant until the next beat).
+func (s *Service) externalBots(ctx context.Context, team store.TeamDoc) []Bot {
+	if len(team.ExternalBots) == 0 {
+		return nil
+	}
+	machines, err := s.repository.ListMachinesForUsers(ctx, team.Members)
+	if err != nil {
+		slog.Warn("team external bots: member machines unavailable", "teamId", team.ID, "error", err)
+		return nil
+	}
+	active := team.ActiveExternalBots(machines)
+	out := make([]Bot, 0, len(active))
+	for _, bot := range active {
+		out = append(out, Bot{AppID: bot.AppID, UnionID: bot.UnionID, Name: bot.Name, OwnerUnionID: bot.RegisteredBy, External: true})
+	}
+	return out
+}
+
 func (s *Service) ensureHall(ctx context.Context, team store.TeamDoc) string {
 	s.mu.Lock()
 	writeEnabled := s.writeEnabled
@@ -190,11 +217,7 @@ func (s *Service) ensureHall(ctx context.Context, team store.TeamDoc) string {
 	s.hallAttempts[team.ID] = time.Now()
 	s.mu.Unlock()
 
-	appIDs := make([]string, 0, len(team.Bots))
-	for _, bot := range team.Bots {
-		appIDs = append(appIDs, bot.AppID)
-	}
-	chatID, invalid, err := s.feishu.CreateHallGroup(ctx, team.Name, appIDs)
+	chatID, invalid, err := s.feishu.CreateHallGroup(ctx, team.Name, team.HallBotAppIDs())
 	if err != nil || chatID == "" {
 		slog.Warn("create team hall", "teamId", team.ID, "invalidBots", len(invalid), "error", err)
 		return ""
@@ -262,11 +285,7 @@ func (s *Service) SyncHallMembers(ctx context.Context, teamID string, addAppIDs,
 		// Every add rejected: the hall is probably gone. Confirm, then rebuild
 		// with all team bots.
 		if len(invalid) == len(addAppIDs) && s.feishu.GetChatStatus(ctx, token, team.HallChatID) == feishu.ChatGone {
-			all := make([]string, 0, len(team.Bots))
-			for _, bot := range team.Bots {
-				all = append(all, bot.AppID)
-			}
-			newID, _, createErr := s.feishu.CreateHallGroup(ctx, team.Name, all)
+			newID, _, createErr := s.feishu.CreateHallGroup(ctx, team.Name, team.HallBotAppIDs())
 			if createErr == nil && newID != "" {
 				won, casErr := s.repository.CompareAndSetTeamHallChat(ctx, teamID, team.HallChatID, newID)
 				if casErr == nil && won {
@@ -288,6 +307,10 @@ func (s *Service) SyncHallMembers(ctx context.Context, teamID string, addAppIDs,
 		_ = s.PushToMembers(ctx, teamID)
 		s.teachHallBotUnions(ctx, token, team, hallChatID, nil)
 	}
+	// Never evict a bot the hall should still hold: the caller's list was
+	// computed before this read, and the same appId may be a botmux bot and
+	// an external bot, or have been registered again meanwhile.
+	removeAppIDs = withoutStrings(removeAppIDs, team.HallBotAppIDs())
 	if len(removeAppIDs) > 0 {
 		// Best effort, like removeBotsFromChat: a leftover member is harmless
 		// because trust follows the roster, not hall membership.
@@ -470,6 +493,17 @@ func (s *Service) machineDoc(ctx context.Context, cache map[string]*store.Machin
 	}
 	cache[machineID] = result
 	return result
+}
+
+// withoutStrings is values minus every element of drop, in order.
+func withoutStrings(values, drop []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if !slices.Contains(drop, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // cloneTeam deep-copies a cached entry. The slices are always non-nil so a
